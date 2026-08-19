@@ -1,6 +1,19 @@
 from typing import TypedDict
 from langgraph.graph import StateGraph, START, END
 import time
+import requests
+
+INGESTION_URL = "http://localhost:8000/events"
+
+def send_trace_event(node_name: str, step: int, message: str):
+    try:
+        requests.post(INGESTION_URL, json={
+            "node_name": node_name,
+            "step": step,
+            "message": message
+        }, timeout=1)
+    except requests.exceptions.RequestException as e:
+        print(f"[WARN] Failed to send trace event: {e}")
 
 # 1. Define State
 class AgentState(TypedDict):
@@ -9,7 +22,7 @@ class AgentState(TypedDict):
 
 # 2. Node 1: Agent Step
 def agent_node(state: AgentState) -> AgentState:
-    print(f"\n[TRACE] Node: Agent | Current Step: {state['step_count']}")
+    send_trace_event("Agent", state["step_count"], "Calling fake tool...")
     return {
         "step_count": state["step_count"] + 1,
         "message": "Calling fake tool..."
@@ -17,7 +30,7 @@ def agent_node(state: AgentState) -> AgentState:
 
 # 3. Node 2: Fake Tool
 def fake_tool_node(state: AgentState) -> AgentState:
-    print(f"[TRACE] Node: Fake Tool | Executing fake tool action...")
+    send_trace_event("Fake Tool", state["step_count"], "Executing fake tool action...")
     time.sleep(0.3)
     return {
         "step_count": state["step_count"],
@@ -44,6 +57,7 @@ workflow.add_conditional_edges(
         "stop": END
     }
 )
+
 workflow.add_edge("fake_tool", "agent")
 
 app = workflow.compile()
