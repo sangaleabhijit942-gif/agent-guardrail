@@ -5,15 +5,17 @@ import requests
 
 INGESTION_URL = "http://localhost:8000/events"
 
-def send_trace_event(node_name: str, step: int, message: str):
+def send_trace_event(node_name: str, step: int, message: str) -> dict:
     try:
-        requests.post(INGESTION_URL, json={
+        response = requests.post(INGESTION_URL, json={
             "node_name": node_name,
             "step": step,
             "message": message
         }, timeout=1)
+        return response.json()
     except requests.exceptions.RequestException as e:
         print(f"[WARN] Failed to send trace event: {e}")
+        return {"status": "ok"}
 
 # 1. Define State
 class AgentState(TypedDict):
@@ -23,7 +25,10 @@ class AgentState(TypedDict):
 
 # 2. Node 1: Agent Step
 def agent_node(state: AgentState) -> AgentState:
-    send_trace_event("Agent", state["step_count"], "Calling fake tool...")
+    result = send_trace_event("Agent", state["step_count"], "Calling fake tool...")
+    if result.get("status") == "kill":
+        print(f"\n[STOPPED BY GUARDRAIL] Reason: {result.get('reason')}")
+        raise RuntimeError("Workflow killed by cost guardrail")
     return {
         "step_count": state["step_count"] + 1,
         "message": "Calling fake tool...",
@@ -32,7 +37,10 @@ def agent_node(state: AgentState) -> AgentState:
 
 # 3. Node 2: Fake Tool
 def fake_tool_node(state: AgentState) -> AgentState:
-    send_trace_event("Fake Tool", state["step_count"], "Executing fake tool action...")
+    result = send_trace_event("Fake Tool", state["step_count"], "Executing fake tool action...")
+    if result.get("status") == "kill":
+        print(f"\n[STOPPED BY GUARDRAIL] Reason: {result.get('reason')}")
+        raise RuntimeError("Workflow killed by cost guardrail")
     time.sleep(0.3)
     return {
         "step_count": state["step_count"],
@@ -40,32 +48,40 @@ def fake_tool_node(state: AgentState) -> AgentState:
         "retry_count": state["retry_count"]
     }
 
-# 4. Node 3: Validator — checks the tool's result, decides proceed or retry
+# 4. Node 3: Validator
 def validator_node(state: AgentState) -> AgentState:
-    send_trace_event("Validator", state["step_count"], "Validating tool result...")
+    result = send_trace_event("Validator", state["step_count"], "Validating tool result...")
+    if result.get("status") == "kill":
+        print(f"\n[STOPPED BY GUARDRAIL] Reason: {result.get('reason')}")
+        raise RuntimeError("Workflow killed by cost guardrail")
     time.sleep(0.2)
-    # Simple simulated check: fail validation once (on step 1) to force a retry, pass otherwise
     if state["step_count"] == 1 and state["retry_count"] == 0:
-        send_trace_event("Validator", state["step_count"], "Validation FAILED — flagging retry")
+        result = send_trace_event("Validator", state["step_count"], "Validation FAILED — flagging retry")
+        if result.get("status") == "kill":
+            print(f"\n[STOPPED BY GUARDRAIL] Reason: {result.get('reason')}")
+            raise RuntimeError("Workflow killed by cost guardrail")
         return {
             "step_count": state["step_count"],
             "message": "Validation failed, retrying...",
             "retry_count": state["retry_count"] + 1
         }
-    send_trace_event("Validator", state["step_count"], "Validation passed")
+    result = send_trace_event("Validator", state["step_count"], "Validation passed")
+    if result.get("status") == "kill":
+        print(f"\n[STOPPED BY GUARDRAIL] Reason: {result.get('reason')}")
+        raise RuntimeError("Workflow killed by cost guardrail")
     return {
         "step_count": state["step_count"],
         "message": "Validation passed",
         "retry_count": state["retry_count"]
     }
 
-# 5. Conditional Edge from Agent (loop 3 times then stop)
+# 5. Conditional Edge from Agent
 def should_continue(state: AgentState) -> str:
     if state["step_count"] < 3:
         return "call_tool"
     return "stop"
 
-# 6. Conditional Edge from Validator (retry tool or move back to agent)
+# 6. Conditional Edge from Validator
 def validation_result(state: AgentState) -> str:
     if state["message"] == "Validation failed, retrying...":
         return "retry"
@@ -102,6 +118,9 @@ app = workflow.compile()
 if __name__ == "__main__":
     print("=== Starting Local Agent Execution ===")
     initial_state = {"step_count": 0, "message": "Start", "retry_count": 0}
-    result = app.invoke(initial_state)
-    print("\n=== Execution Complete ===")
-    print("Final State Output:", result)
+    try:
+        result = app.invoke(initial_state)
+        print("\n=== Execution Complete ===")
+        print("Final State Output:", result)
+    except RuntimeError as e:
+        print(f"\n=== Execution Halted: {e} ===")
