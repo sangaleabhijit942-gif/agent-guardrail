@@ -2,15 +2,18 @@ from typing import TypedDict
 from langgraph.graph import StateGraph, START, END
 import time
 import requests
+import uuid
 
 INGESTION_URL = "http://localhost:8000/events"
+TRACE_ID = str(uuid.uuid4())
 
 def send_trace_event(node_name: str, step: int, message: str) -> dict:
     try:
         response = requests.post(INGESTION_URL, json={
             "node_name": node_name,
             "step": step,
-            "message": message
+            "message": message,
+            "trace_id": TRACE_ID
         }, timeout=1)
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -116,7 +119,7 @@ app = workflow.compile()
 
 # 8. Execute Locally
 if __name__ == "__main__":
-    print("=== Starting Local Agent Execution ===")
+    print(f"=== Starting Local Agent Execution (trace_id: {TRACE_ID}) ===")
     initial_state = {"step_count": 0, "message": "Start", "retry_count": 0}
     try:
         result = app.invoke(initial_state)
