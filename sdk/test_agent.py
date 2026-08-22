@@ -3,6 +3,12 @@ from langgraph.graph import StateGraph, START, END
 import time
 import requests
 import uuid
+from dotenv import load_dotenv
+import os
+from groq import Groq
+
+load_dotenv()
+client = Groq(api_key=os.getenv("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"))
 
 INGESTION_URL = "http://localhost:8000/events"
 TRACE_ID = str(uuid.uuid4())
@@ -51,15 +57,27 @@ def fake_tool_node(state: AgentState) -> AgentState:
         "retry_count": state["retry_count"]
     }
 
-# 4. Node 3: Validator
+# 4. Node 3: Validator (now using a real LLM decision via Groq)
 def validator_node(state: AgentState) -> AgentState:
     result = send_trace_event("Validator", state["step_count"], "Validating tool result...")
     if result.get("status") == "kill":
         print(f"\n[STOPPED BY GUARDRAIL] Reason: {result.get('reason')}")
         raise RuntimeError("Workflow killed by cost guardrail")
-    time.sleep(0.2)
-    if state["step_count"] == 1 and state["retry_count"] == 0:
-        result = send_trace_event("Validator", state["step_count"], "Validation FAILED — flagging retry")
+
+    response = client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        max_tokens=50,
+        reasoning_effort="low",
+        messages=[{
+            "role": "user",
+            "content": f"You are validating a tool's output on step {state['step_count']} of an automated workflow, retry attempt {state['retry_count']}. Respond with exactly one word: PASS or FAIL. Randomly decide, as if judging a real but unseen tool result."
+        }]
+    )
+    decision = response.choices[0].message.content.strip().upper()
+    print(f"[LLM DECISION] {decision}")
+
+    if "FAIL" in decision and state["retry_count"] < 2:
+        result = send_trace_event("Validator", state["step_count"], "Validation FAILED (LLM decision) — flagging retry")
         if result.get("status") == "kill":
             print(f"\n[STOPPED BY GUARDRAIL] Reason: {result.get('reason')}")
             raise RuntimeError("Workflow killed by cost guardrail")
@@ -68,6 +86,7 @@ def validator_node(state: AgentState) -> AgentState:
             "message": "Validation failed, retrying...",
             "retry_count": state["retry_count"] + 1
         }
+
     result = send_trace_event("Validator", state["step_count"], "Validation passed")
     if result.get("status") == "kill":
         print(f"\n[STOPPED BY GUARDRAIL] Reason: {result.get('reason')}")
