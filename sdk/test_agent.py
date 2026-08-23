@@ -5,34 +5,34 @@ import requests
 import uuid
 from dotenv import load_dotenv
 import os
-from groq import Groq
+import anthropic
 
 load_dotenv()
-client = Groq(api_key=os.getenv("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"))
+client = anthropic.Anthropic(api_key=os.getenv("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"))
 
 INGESTION_URL = "http://localhost:8000/events"
 TRACE_ID = str(uuid.uuid4())
 
-def send_trace_event(node_name: str, step: int, message: str) -> dict:
+def send_trace_event(node_name: str, step: int, message: str, tokens_in: int = 0, tokens_out: int = 0) -> dict:
     try:
         response = requests.post(INGESTION_URL, json={
             "node_name": node_name,
             "step": step,
             "message": message,
-            "trace_id": TRACE_ID
+            "trace_id": TRACE_ID,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out
         }, timeout=1)
         return response.json()
     except requests.exceptions.RequestException as e:
         print(f"[WARN] Failed to send trace event: {e}")
         return {"status": "ok"}
 
-# 1. Define State
 class AgentState(TypedDict):
     step_count: int
     message: str
     retry_count: int
 
-# 2. Node 1: Agent Step
 def agent_node(state: AgentState) -> AgentState:
     result = send_trace_event("Agent", state["step_count"], "Calling fake tool...")
     if result.get("status") == "kill":
@@ -44,7 +44,6 @@ def agent_node(state: AgentState) -> AgentState:
         "retry_count": state["retry_count"]
     }
 
-# 3. Node 2: Fake Tool
 def fake_tool_node(state: AgentState) -> AgentState:
     result = send_trace_event("Fake Tool", state["step_count"], "Executing fake tool action...")
     if result.get("status") == "kill":
@@ -57,24 +56,25 @@ def fake_tool_node(state: AgentState) -> AgentState:
         "retry_count": state["retry_count"]
     }
 
-# 4. Node 3: Validator (now using a real LLM decision via Groq)
 def validator_node(state: AgentState) -> AgentState:
-    result = send_trace_event("Validator", state["step_count"], "Validating tool result...")
-    if result.get("status") == "kill":
-        print(f"\n[STOPPED BY GUARDRAIL] Reason: {result.get('reason')}")
-        raise RuntimeError("Workflow killed by cost guardrail")
-
-    response = client.chat.completions.create(
-        model="openai/gpt-oss-20b",
-        max_tokens=50,
-        reasoning_effort="low",
+    # Real Anthropic call with real token usage
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=10,
         messages=[{
             "role": "user",
             "content": f"You are validating a tool's output on step {state['step_count']} of an automated workflow, retry attempt {state['retry_count']}. Respond with exactly one word: PASS or FAIL. Randomly decide, as if judging a real but unseen tool result."
         }]
     )
-    decision = response.choices[0].message.content.strip().upper()
-    print(f"[LLM DECISION] {decision}")
+    decision = response.content[0].text.strip().upper()
+    tokens_in = response.usage.input_tokens
+    tokens_out = response.usage.output_tokens
+    print(f"[LLM DECISION] {decision} (tokens: {tokens_in} in / {tokens_out} out)")
+
+    result = send_trace_event("Validator", state["step_count"], "Validating tool result...", tokens_in, tokens_out)
+    if result.get("status") == "kill":
+        print(f"\n[STOPPED BY GUARDRAIL] Reason: {result.get('reason')}")
+        raise RuntimeError("Workflow killed by cost guardrail")
 
     if "FAIL" in decision and state["retry_count"] < 2:
         result = send_trace_event("Validator", state["step_count"], "Validation FAILED (LLM decision) — flagging retry")
@@ -97,19 +97,16 @@ def validator_node(state: AgentState) -> AgentState:
         "retry_count": state["retry_count"]
     }
 
-# 5. Conditional Edge from Agent
 def should_continue(state: AgentState) -> str:
     if state["step_count"] < 3:
         return "call_tool"
     return "stop"
 
-# 6. Conditional Edge from Validator
 def validation_result(state: AgentState) -> str:
     if state["message"] == "Validation failed, retrying...":
         return "retry"
     return "proceed"
 
-# 7. Build Graph
 workflow = StateGraph(AgentState)
 workflow.add_node("agent", agent_node)
 workflow.add_node("fake_tool", fake_tool_node)
@@ -119,24 +116,17 @@ workflow.add_edge(START, "agent")
 workflow.add_conditional_edges(
     "agent",
     should_continue,
-    {
-        "call_tool": "fake_tool",
-        "stop": END
-    }
+    {"call_tool": "fake_tool", "stop": END}
 )
 workflow.add_edge("fake_tool", "validator")
 workflow.add_conditional_edges(
     "validator",
     validation_result,
-    {
-        "retry": "fake_tool",
-        "proceed": "agent"
-    }
+    {"retry": "fake_tool", "proceed": "agent"}
 )
 
 app = workflow.compile()
 
-# 8. Execute Locally
 if __name__ == "__main__":
     print(f"=== Starting Local Agent Execution (trace_id: {TRACE_ID}) ===")
     initial_state = {"step_count": 0, "message": "Start", "retry_count": 0}
