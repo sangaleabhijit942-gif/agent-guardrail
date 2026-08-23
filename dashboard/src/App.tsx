@@ -1,9 +1,12 @@
+import { useEffect, useState } from 'react'
+
 type GaugeStatus = 'safe' | 'warn' | 'danger'
 
 interface WorkflowGauge {
-  name: string
-  currentCost: number
+  trace_id: string
+  cost: number
   limit: number
+  status: string
 }
 
 function getStatus(pct: number): GaugeStatus {
@@ -13,16 +16,16 @@ function getStatus(pct: number): GaugeStatus {
 }
 
 function Gauge({ workflow }: { workflow: WorkflowGauge }) {
-  const pct = Math.min((workflow.currentCost / workflow.limit) * 100, 100)
+  const pct = Math.min((workflow.cost / workflow.limit) * 100, 100)
   const status = getStatus(pct)
   const color = status === 'danger' ? 'var(--danger)' : status === 'warn' ? 'var(--warn)' : 'var(--safe)'
 
   return (
     <div className="gauge-row">
       <div className="gauge-header">
-        <span className="gauge-name">{workflow.name}</span>
+        <span className="gauge-name">{workflow.trace_id}</span>
         <span className="gauge-cost">
-          ${workflow.currentCost.toFixed(2)} / ${workflow.limit.toFixed(2)}
+          ${workflow.cost.toFixed(2)} / ${workflow.limit.toFixed(2)}
         </span>
       </div>
       <div className="gauge-track">
@@ -33,11 +36,22 @@ function Gauge({ workflow }: { workflow: WorkflowGauge }) {
 }
 
 function App() {
-  const placeholderWorkflows: WorkflowGauge[] = [
-    { name: 'support-bot-run-4482', currentCost: 0.12, limit: 0.20 },
-    { name: 'research-agent-run-91', currentCost: 0.20, limit: 0.20 },
-    { name: 'code-review-agent-run-17', currentCost: 0.05, limit: 0.50 },
-  ]
+  const [workflows, setWorkflows] = useState<WorkflowGauge[]>([])
+
+  useEffect(() => {
+    const fetchWorkflows = () => {
+      fetch('http://localhost:8000/workflows')
+        .then((res) => res.json())
+        .then((data) => setWorkflows(data.workflows))
+        .catch((err) => console.error('Failed to fetch workflows:', err))
+    }
+
+    fetchWorkflows()
+    const interval = setInterval(fetchWorkflows, 3000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const killedCount = workflows.filter((w) => w.status === 'killed').length
 
   return (
     <div className="dashboard">
@@ -48,11 +62,11 @@ function App() {
       <div className="stat-grid">
         <div className="stat-card">
           <div className="stat-label">Workflows monitored</div>
-          <div className="stat-value">3</div>
+          <div className="stat-value">{workflows.length}</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Kills triggered</div>
-          <div className="stat-value warn">1</div>
+          <div className="stat-value warn">{killedCount}</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Estimated saved</div>
@@ -61,9 +75,13 @@ function App() {
       </div>
 
       <div className="section-title">Active workflows</div>
-      {placeholderWorkflows.map((w) => (
-        <Gauge key={w.name} workflow={w} />
-      ))}
+      {workflows.length === 0 ? (
+        <div className="gauge-row">
+          <span className="gauge-cost">No workflows yet. Run a test agent to see data here.</span>
+        </div>
+      ) : (
+        workflows.map((w) => <Gauge key={w.trace_id} workflow={w} />)
+      )}
     </div>
   )
 }

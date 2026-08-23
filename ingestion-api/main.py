@@ -1,21 +1,26 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime
 
 app = FastAPI()
 
-# Simple in-memory cost tracker: {trace_id: total_cost}
-# NOTE: in-memory only, resets if the server restarts — fine for today's prototype
-workflow_costs: dict[str, float] = {}
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-COST_PER_EVENT = 0.05  # fake placeholder cost per node action, replace with real token-based calc later
-KILL_THRESHOLD = 0.20  # kill after $0.20 accumulated, for easy testing
+workflow_costs: dict[str, float] = {}
+COST_PER_EVENT = 0.05
+KILL_THRESHOLD = 0.20
 
 class TraceEvent(BaseModel):
     node_name: str
     step: int
     message: str
-    trace_id: str = "default-run"  # temporary placeholder until real trace IDs are added
+    trace_id: str = "default-run"
 
 @app.post("/events")
 async def receive_event(event: TraceEvent):
@@ -29,3 +34,15 @@ async def receive_event(event: TraceEvent):
         return {"status": "kill", "reason": f"Cost threshold exceeded: ${current_cost:.2f}"}
 
     return {"status": "ok"}
+
+@app.get("/workflows")
+async def list_workflows():
+    result = []
+    for trace_id, cost in workflow_costs.items():
+        result.append({
+            "trace_id": trace_id,
+            "cost": round(cost, 2),
+            "limit": KILL_THRESHOLD,
+            "status": "killed" if cost >= KILL_THRESHOLD else "active"
+        })
+    return {"workflows": result}
