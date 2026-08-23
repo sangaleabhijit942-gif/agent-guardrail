@@ -14,14 +14,10 @@ app.add_middleware(
 
 workflow_costs: dict[str, float] = {}
 
-# Real Claude Haiku 4.5 pricing, per token (not per million) — confirmed current rates
 INPUT_COST_PER_TOKEN = 1 / 1_000_000
 OUTPUT_COST_PER_TOKEN = 5 / 1_000_000
 
-# Real threshold, in real dollars — replaces the old $0.20 test placeholder.
-# Set deliberately low for now since we're still testing with tiny toy calls;
-# this will need to be customer-configurable later (per the Month 3 policy layer plan).
-KILL_THRESHOLD = 0.01
+KILL_THRESHOLD = 0.0001
 
 class TraceEvent(BaseModel):
     node_name: str
@@ -56,3 +52,13 @@ async def list_workflows():
             "status": "killed" if cost >= KILL_THRESHOLD else "active"
         })
     return {"workflows": result}
+
+@app.get("/stats")
+async def get_stats():
+    killed = [c for c in workflow_costs.values() if c >= KILL_THRESHOLD]
+    total_saved = len(killed) * KILL_THRESHOLD
+    return {
+        "total_workflows": len(workflow_costs),
+        "killed_count": len(killed),
+        "estimated_saved": round(total_saved, 6)
+    }

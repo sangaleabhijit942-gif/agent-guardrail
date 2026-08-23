@@ -9,6 +9,12 @@ interface WorkflowGauge {
   status: string
 }
 
+interface Stats {
+  total_workflows: number
+  killed_count: number
+  estimated_saved: number
+}
+
 function getStatus(pct: number): GaugeStatus {
   if (pct >= 100) return 'danger'
   if (pct >= 70) return 'warn'
@@ -25,7 +31,7 @@ function Gauge({ workflow }: { workflow: WorkflowGauge }) {
       <div className="gauge-header">
         <span className="gauge-name">{workflow.trace_id}</span>
         <span className="gauge-cost">
-          ${workflow.cost.toFixed(2)} / ${workflow.limit.toFixed(2)}
+          ${workflow.cost.toFixed(6)} / ${workflow.limit.toFixed(6)}
         </span>
       </div>
       <div className="gauge-track">
@@ -37,21 +43,24 @@ function Gauge({ workflow }: { workflow: WorkflowGauge }) {
 
 function App() {
   const [workflows, setWorkflows] = useState<WorkflowGauge[]>([])
+  const [stats, setStats] = useState<Stats>({ total_workflows: 0, killed_count: 0, estimated_saved: 0 })
 
   useEffect(() => {
-    const fetchWorkflows = () => {
+    const fetchData = () => {
       fetch('http://localhost:8000/workflows')
         .then((res) => res.json())
         .then((data) => setWorkflows(data.workflows))
         .catch((err) => console.error('Failed to fetch workflows:', err))
-    }
 
-    fetchWorkflows()
-    const interval = setInterval(fetchWorkflows, 3000)
+      fetch('http://localhost:8000/stats')
+        .then((res) => res.json())
+        .then((data) => setStats(data))
+        .catch((err) => console.error('Failed to fetch stats:', err))
+    }
+    fetchData()
+    const interval = setInterval(fetchData, 3000)
     return () => clearInterval(interval)
   }, [])
-
-  const killedCount = workflows.filter((w) => w.status === 'killed').length
 
   return (
     <div className="dashboard">
@@ -62,15 +71,15 @@ function App() {
       <div className="stat-grid">
         <div className="stat-card">
           <div className="stat-label">Workflows monitored</div>
-          <div className="stat-value">{workflows.length}</div>
+          <div className="stat-value">{stats.total_workflows}</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Kills triggered</div>
-          <div className="stat-value warn">{killedCount}</div>
+          <div className="stat-value warn">{stats.killed_count}</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Estimated saved</div>
-          <div className="stat-value safe">$0.00</div>
+          <div className="stat-value safe">${stats.estimated_saved.toFixed(6)}</div>
         </div>
       </div>
 
