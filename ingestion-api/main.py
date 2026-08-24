@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, UTC
 from dotenv import load_dotenv
 from clickhouse_client import get_client
 
@@ -36,7 +36,7 @@ async def receive_event(event: TraceEvent):
 
     ch_client.insert(
         "agent_events",
-        [[event.trace_id, event.node_name, event.step, event.message, event.tokens_in, event.tokens_out, event_cost, datetime.utcnow()]],
+        [[event.trace_id, event.node_name, event.step, event.message, event.tokens_in, event.tokens_out, event_cost, datetime.now(UTC)]],
         column_names=["trace_id", "node_name", "step", "message", "tokens_in", "tokens_out", "cost", "timestamp"]
     )
 
@@ -46,7 +46,7 @@ async def receive_event(event: TraceEvent):
     )
     current_cost = result.result_rows[0][0] or 0.0
 
-    print(f"[RECEIVED] {datetime.utcnow().isoformat()} | Node: {event.node_name} | Step: {event.step} | {event.message} | Tokens: {event.tokens_in}in/{event.tokens_out}out | Cost so far: ${current_cost:.6f}")
+    print(f"[RECEIVED] {datetime.now(UTC).isoformat()} | Node: {event.node_name} | Step: {event.step} | {event.message} | Tokens: {event.tokens_in}in/{event.tokens_out}out | Cost so far: ${current_cost:.6f}")
 
     if current_cost >= KILL_THRESHOLD:
         print(f"[KILL SIGNAL] Trace '{event.trace_id}' exceeded ${KILL_THRESHOLD:.2f} — signaling kill")
