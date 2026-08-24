@@ -13,18 +13,24 @@ client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 INGESTION_URL = "http://localhost:8000/events"
 TRACE_ID = str(uuid.uuid4())
 WORKFLOW_NAME = "test-agent-workflow"
+API_KEY = "ag_test_51f8a3c2e94b4d7a9c1f6e8b2a3d5c7f"
 
 def send_trace_event(node_name: str, step: int, message: str, tokens_in: int = 0, tokens_out: int = 0) -> dict:
     try:
-        response = requests.post(INGESTION_URL, json={
-            "node_name": node_name,
-            "step": step,
-            "message": message,
-            "trace_id": TRACE_ID,
-            "workflow_name": WORKFLOW_NAME,
-            "tokens_in": tokens_in,
-            "tokens_out": tokens_out
-        }, timeout=1)
+        response = requests.post(
+            INGESTION_URL,
+            json={
+                "node_name": node_name,
+                "step": step,
+                "message": message,
+                "trace_id": TRACE_ID,
+                "workflow_name": WORKFLOW_NAME,
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out
+            },
+            headers={"X-API-Key": API_KEY},
+            timeout=1
+        )
         return response.json()
     except requests.exceptions.RequestException as e:
         print(f"[WARN] Failed to send trace event: {e}")

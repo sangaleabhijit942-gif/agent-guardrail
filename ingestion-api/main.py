@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime, UTC
@@ -35,43 +35,52 @@ class ThresholdConfig(BaseModel):
     workflow_name: str
     threshold: float
 
-def get_threshold(workflow_name: str) -> float:
+def get_current_customer(x_api_key: str = Header(...)) -> str:
     result = ch_client.query(
-        "SELECT threshold FROM workflow_thresholds FINAL WHERE workflow_name = {name:String}",
-        parameters={"name": workflow_name}
+        "SELECT customer_id FROM customers FINAL WHERE api_key = {key:String}",
+        parameters={"key": x_api_key}
+    )
+    if not result.result_rows:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    return result.result_rows[0][0]
+
+def get_threshold(customer_id: str, workflow_name: str) -> float:
+    result = ch_client.query(
+        "SELECT threshold FROM workflow_thresholds FINAL WHERE workflow_name = {name:String} AND customer_id = {cust:String}",
+        parameters={"name": workflow_name, "cust": customer_id}
     )
     if result.result_rows:
         return result.result_rows[0][0]
     return KILL_THRESHOLD
 
 @app.post("/thresholds")
-async def set_threshold(config: ThresholdConfig):
+async def set_threshold(config: ThresholdConfig, customer_id: str = Depends(get_current_customer)):
     ch_client.insert(
         "workflow_thresholds",
-        [[config.workflow_name, config.threshold]],
-        column_names=["workflow_name", "threshold"]
+        [[config.workflow_name, config.threshold, datetime.now(UTC), customer_id]],
+        column_names=["workflow_name", "threshold", "updated_at", "customer_id"]
     )
     return {"status": "ok", "workflow_name": config.workflow_name, "threshold": config.threshold}
 
 @app.post("/events")
-async def receive_event(event: TraceEvent):
+async def receive_event(event: TraceEvent, customer_id: str = Depends(get_current_customer)):
     event_cost = (event.tokens_in * INPUT_COST_PER_TOKEN) + (event.tokens_out * OUTPUT_COST_PER_TOKEN)
 
     ch_client.insert(
         "agent_events",
-        [[event.trace_id, event.node_name, event.step, event.message, event.tokens_in, event.tokens_out, event_cost, datetime.now(UTC)]],
-        column_names=["trace_id", "node_name", "step", "message", "tokens_in", "tokens_out", "cost", "timestamp"]
+        [[event.trace_id, event.node_name, event.step, event.message, event.tokens_in, event.tokens_out, event_cost, datetime.now(UTC), customer_id]],
+        column_names=["trace_id", "node_name", "step", "message", "tokens_in", "tokens_out", "cost", "timestamp", "customer_id"]
     )
 
     result = ch_client.query(
-        "SELECT SUM(cost) FROM agent_events WHERE trace_id = {trace_id:String}",
-        parameters={"trace_id": event.trace_id}
+        "SELECT SUM(cost) FROM agent_events WHERE trace_id = {trace_id:String} AND customer_id = {cust:String}",
+        parameters={"trace_id": event.trace_id, "cust": customer_id}
     )
     current_cost = result.result_rows[0][0] or 0.0
 
-    threshold = get_threshold(event.workflow_name)
+    threshold = get_threshold(customer_id, event.workflow_name)
 
-    print(f"[RECEIVED] {datetime.now(UTC).isoformat()} | Node: {event.node_name} | Step: {event.step} | {event.message} | Tokens: {event.tokens_in}in/{event.tokens_out}out | Cost so far: ${current_cost:.6f} | Threshold: ${threshold:.6f}")
+    print(f"[RECEIVED] {datetime.now(UTC).isoformat()} | Customer: {customer_id} | Node: {event.node_name} | Step: {event.step} | {event.message} | Tokens: {event.tokens_in}in/{event.tokens_out}out | Cost so far: ${current_cost:.6f} | Threshold: ${threshold:.6f}")
 
     if current_cost >= threshold:
         print(f"[KILL SIGNAL] Trace '{event.trace_id}' exceeded ${threshold:.6f} — signaling kill")
@@ -80,9 +89,10 @@ async def receive_event(event: TraceEvent):
     return {"status": "ok"}
 
 @app.get("/workflows")
-async def list_workflows():
+async def list_workflows(customer_id: str = Depends(get_current_customer)):
     result = ch_client.query(
-        "SELECT trace_id, SUM(cost) as total_cost FROM agent_events GROUP BY trace_id"
+        "SELECT trace_id, SUM(cost) as total_cost FROM agent_events WHERE customer_id = {cust:String} GROUP BY trace_id",
+        parameters={"cust": customer_id}
     )
     workflows = []
     for row in result.result_rows:
@@ -96,9 +106,10 @@ async def list_workflows():
     return {"workflows": workflows}
 
 @app.get("/stats")
-async def get_stats():
+async def get_stats(customer_id: str = Depends(get_current_customer)):
     result = ch_client.query(
-        "SELECT trace_id, SUM(cost) as total_cost FROM agent_events GROUP BY trace_id"
+        "SELECT trace_id, SUM(cost) as total_cost FROM agent_events WHERE customer_id = {cust:String} GROUP BY trace_id",
+        parameters={"cust": customer_id}
     )
     all_costs = [row[1] for row in result.result_rows]
     killed = [c for c in all_costs if c >= KILL_THRESHOLD]
