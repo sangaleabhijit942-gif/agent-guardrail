@@ -8,10 +8,11 @@ import os
 import anthropic
 
 load_dotenv()
-client = anthropic.Anthropic(api_key=os.getenv("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"))
+client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 INGESTION_URL = "http://localhost:8000/events"
 TRACE_ID = str(uuid.uuid4())
+WORKFLOW_NAME = "test-agent-workflow"
 
 def send_trace_event(node_name: str, step: int, message: str, tokens_in: int = 0, tokens_out: int = 0) -> dict:
     try:
@@ -20,6 +21,7 @@ def send_trace_event(node_name: str, step: int, message: str, tokens_in: int = 0
             "step": step,
             "message": message,
             "trace_id": TRACE_ID,
+            "workflow_name": WORKFLOW_NAME,
             "tokens_in": tokens_in,
             "tokens_out": tokens_out
         }, timeout=1)
@@ -57,7 +59,6 @@ def fake_tool_node(state: AgentState) -> AgentState:
     }
 
 def validator_node(state: AgentState) -> AgentState:
-    # Real Anthropic call with real token usage
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=10,
