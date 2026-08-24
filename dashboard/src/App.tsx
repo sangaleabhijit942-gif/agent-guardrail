@@ -41,6 +41,16 @@ function Gauge({ workflow }: { workflow: WorkflowGauge }) {
   )
 }
 
+function buildInsight(stats: Stats): string {
+  if (stats.total_workflows === 0) {
+    return 'No workflows monitored yet. Run an agent to see live activity here.'
+  }
+  if (stats.killed_count === 0) {
+    return `All ${stats.total_workflows} monitored workflow${stats.total_workflows > 1 ? 's are' : ' is'} running within budget. No interventions needed.`
+  }
+  return `${stats.killed_count} workflow${stats.killed_count > 1 ? 's have' : ' has'} been stopped for exceeding cost limits — an estimated $${stats.estimated_saved.toFixed(6)} saved so far.`
+}
+
 function App() {
   const [workflows, setWorkflows] = useState<WorkflowGauge[]>([])
   const [stats, setStats] = useState<Stats>({ total_workflows: 0, killed_count: 0, estimated_saved: 0 })
@@ -57,6 +67,7 @@ function App() {
         .then((data) => setStats(data))
         .catch((err) => console.error('Failed to fetch stats:', err))
     }
+
     fetchData()
     const interval = setInterval(fetchData, 3000)
     return () => clearInterval(interval)
@@ -66,6 +77,11 @@ function App() {
     <div className="dashboard">
       <div className="greeting">
         Good afternoon, <span>Abhijit</span>
+      </div>
+
+      <div className={`insight-card ${stats.killed_count > 0 ? 'insight-warn' : 'insight-safe'}`}>
+        <span className="insight-dot" />
+        <span className="insight-text">{buildInsight(stats)}</span>
       </div>
 
       <div className="stat-grid">

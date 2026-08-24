@@ -115,3 +115,43 @@ body {
   border-radius: 4px;
   transition: width 0.3s ease;
 }
+
+.insight-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--safe);
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 32px;
+}
+
+.insight-warn {
+  border-left-color: var(--warn);
+}
+
+.insight-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--safe);
+  margin-top: 6px;
+  flex-shrink: 0;
+  animation: pulse 2s infinite;
+}
+
+.insight-warn .insight-dot {
+  background: var(--warn);
+}
+
+.insight-text {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+@keyframes pulse {
+  50% { opacity: 0.3; }
+}
