@@ -56,13 +56,19 @@ function App() {
   const [stats, setStats] = useState<Stats>({ total_workflows: 0, killed_count: 0, estimated_saved: 0 })
 
   useEffect(() => {
+    const API_KEY = "ag_test_51f8a3c2e94b4d7a9c1f6e8b2a3d5c7f"
+
     const fetchData = () => {
-      fetch('http://localhost:8000/workflows')
+      fetch('http://localhost:8000/workflows', {
+        headers: { 'X-API-Key': API_KEY }
+      })
         .then((res) => res.json())
         .then((data) => setWorkflows(data.workflows))
         .catch((err) => console.error('Failed to fetch workflows:', err))
 
-      fetch('http://localhost:8000/stats')
+      fetch('http://localhost:8000/stats', {
+        headers: { 'X-API-Key': API_KEY }
+      })
         .then((res) => res.json())
         .then((data) => setStats(data))
         .catch((err) => console.error('Failed to fetch stats:', err))

@@ -16,11 +16,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ch_client = get_client()
-
 INPUT_COST_PER_TOKEN = 1 / 1_000_000
 OUTPUT_COST_PER_TOKEN = 5 / 1_000_000
-KILL_THRESHOLD = 0.01  # fallback default when no per-workflow threshold is configured
+KILL_THRESHOLD = 0.01
 
 class TraceEvent(BaseModel):
     node_name: str
@@ -36,7 +34,8 @@ class ThresholdConfig(BaseModel):
     threshold: float
 
 def get_current_customer(x_api_key: str = Header(...)) -> str:
-    result = ch_client.query(
+    client = get_client()
+    result = client.query(
         "SELECT customer_id FROM customers FINAL WHERE api_key = {key:String}",
         parameters={"key": x_api_key}
     )
@@ -45,7 +44,8 @@ def get_current_customer(x_api_key: str = Header(...)) -> str:
     return result.result_rows[0][0]
 
 def get_threshold(customer_id: str, workflow_name: str) -> float:
-    result = ch_client.query(
+    client = get_client()
+    result = client.query(
         "SELECT threshold FROM workflow_thresholds FINAL WHERE workflow_name = {name:String} AND customer_id = {cust:String}",
         parameters={"name": workflow_name, "cust": customer_id}
     )
@@ -55,7 +55,8 @@ def get_threshold(customer_id: str, workflow_name: str) -> float:
 
 @app.post("/thresholds")
 async def set_threshold(config: ThresholdConfig, customer_id: str = Depends(get_current_customer)):
-    ch_client.insert(
+    client = get_client()
+    client.insert(
         "workflow_thresholds",
         [[config.workflow_name, config.threshold, datetime.now(UTC), customer_id]],
         column_names=["workflow_name", "threshold", "updated_at", "customer_id"]
@@ -64,15 +65,16 @@ async def set_threshold(config: ThresholdConfig, customer_id: str = Depends(get_
 
 @app.post("/events")
 async def receive_event(event: TraceEvent, customer_id: str = Depends(get_current_customer)):
+    client = get_client()
     event_cost = (event.tokens_in * INPUT_COST_PER_TOKEN) + (event.tokens_out * OUTPUT_COST_PER_TOKEN)
 
-    ch_client.insert(
+    client.insert(
         "agent_events",
         [[event.trace_id, event.node_name, event.step, event.message, event.tokens_in, event.tokens_out, event_cost, datetime.now(UTC), customer_id]],
         column_names=["trace_id", "node_name", "step", "message", "tokens_in", "tokens_out", "cost", "timestamp", "customer_id"]
     )
 
-    result = ch_client.query(
+    result = client.query(
         "SELECT SUM(cost) FROM agent_events WHERE trace_id = {trace_id:String} AND customer_id = {cust:String}",
         parameters={"trace_id": event.trace_id, "cust": customer_id}
     )
@@ -90,7 +92,8 @@ async def receive_event(event: TraceEvent, customer_id: str = Depends(get_curren
 
 @app.get("/workflows")
 async def list_workflows(customer_id: str = Depends(get_current_customer)):
-    result = ch_client.query(
+    client = get_client()
+    result = client.query(
         "SELECT trace_id, SUM(cost) as total_cost FROM agent_events WHERE customer_id = {cust:String} GROUP BY trace_id",
         parameters={"cust": customer_id}
     )
@@ -107,7 +110,8 @@ async def list_workflows(customer_id: str = Depends(get_current_customer)):
 
 @app.get("/stats")
 async def get_stats(customer_id: str = Depends(get_current_customer)):
-    result = ch_client.query(
+    client = get_client()
+    result = client.query(
         "SELECT trace_id, SUM(cost) as total_cost FROM agent_events WHERE customer_id = {cust:String} GROUP BY trace_id",
         parameters={"cust": customer_id}
     )
