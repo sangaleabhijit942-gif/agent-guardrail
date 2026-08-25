@@ -13,9 +13,9 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["http://localhost:5173", "http://localhost:5174"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
 
 INPUT_COST_PER_TOKEN = 1 / 1_000_000
