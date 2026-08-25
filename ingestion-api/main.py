@@ -4,6 +4,8 @@ from pydantic import BaseModel
 from datetime import datetime, UTC
 from dotenv import load_dotenv
 from clickhouse_client import get_client
+import secrets
+import uuid
 
 load_dotenv()
 
@@ -33,6 +35,9 @@ class ThresholdConfig(BaseModel):
     workflow_name: str
     threshold: float
 
+class SignupRequest(BaseModel):
+    name: str
+
 def get_current_customer(x_api_key: str = Header(...)) -> str:
     client = get_client()
     result = client.query(
@@ -52,6 +57,24 @@ def get_threshold(customer_id: str, workflow_name: str) -> float:
     if result.result_rows:
         return result.result_rows[0][0]
     return KILL_THRESHOLD
+
+@app.post("/signup")
+async def signup(req: SignupRequest):
+    client = get_client()
+    new_customer_id = f"cust-{uuid.uuid4().hex[:8]}"
+    new_api_key = f"ag_{secrets.token_urlsafe(32)}"
+
+    client.insert(
+        "customers",
+        [[new_customer_id, req.name, new_api_key, datetime.now(UTC)]],
+        column_names=["customer_id", "name", "api_key", "created_at"]
+    )
+
+    return {
+        "customer_id": new_customer_id,
+        "api_key": new_api_key,
+        "warning": "Save this API key now — it will not be shown again."
+    }
 
 @app.post("/thresholds")
 async def set_threshold(config: ThresholdConfig, customer_id: str = Depends(get_current_customer)):
