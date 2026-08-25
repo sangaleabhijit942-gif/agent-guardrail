@@ -29,7 +29,7 @@ def send_trace_event(node_name: str, step: int, message: str, tokens_in: int = 0
                 "tokens_out": tokens_out
             },
             headers={"X-API-Key": API_KEY},
-            timeout=1
+            timeout=5
         )
         return response.json()
     except requests.exceptions.RequestException as e:

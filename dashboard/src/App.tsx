@@ -15,6 +15,8 @@ interface Stats {
   estimated_saved: number
 }
 
+const API_KEY = "ag_test_51f8a3c2e94b4d7a9c1f6e8b2a3d5c7f"
+
 function getStatus(pct: number): GaugeStatus {
   if (pct >= 100) return 'danger'
   if (pct >= 70) return 'warn'
@@ -51,29 +53,90 @@ function buildInsight(stats: Stats): string {
   return `${stats.killed_count} workflow${stats.killed_count > 1 ? 's have' : ' has'} been stopped for exceeding cost limits — an estimated $${stats.estimated_saved.toFixed(6)} saved so far.`
 }
 
+function ThresholdForm({ onSaved }: { onSaved: () => void }) {
+  const [workflowName, setWorkflowName] = useState('')
+  const [threshold, setThreshold] = useState('')
+  const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+
+  const handleSave = () => {
+    if (!workflowName.trim() || !threshold.trim()) return
+    setStatus('saving')
+
+    fetch('http://localhost:8000/thresholds', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': API_KEY
+      },
+      body: JSON.stringify({
+        workflow_name: workflowName.trim(),
+        threshold: parseFloat(threshold)
+      })
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Request failed')
+        return res.json()
+      })
+      .then(() => {
+        setStatus('saved')
+        setWorkflowName('')
+        setThreshold('')
+        onSaved()
+        setTimeout(() => setStatus('idle'), 2000)
+      })
+      .catch(() => setStatus('error'))
+  }
+
+  return (
+    <div className="threshold-form">
+      <div className="section-title">Set a workflow threshold</div>
+      <div className="threshold-form-row">
+        <input
+          type="text"
+          placeholder="workflow name (e.g. support-bot)"
+          value={workflowName}
+          onChange={(e) => setWorkflowName(e.target.value)}
+          className="threshold-input"
+        />
+        <input
+          type="number"
+          step="0.0001"
+          placeholder="threshold ($)"
+          value={threshold}
+          onChange={(e) => setThreshold(e.target.value)}
+          className="threshold-input threshold-input-narrow"
+        />
+        <button onClick={handleSave} disabled={status === 'saving'} className="threshold-button">
+          {status === 'saving' ? 'Saving...' : 'Save'}
+        </button>
+      </div>
+      {status === 'saved' && <div className="threshold-message threshold-success">Threshold saved.</div>}
+      {status === 'error' && <div className="threshold-message threshold-error">Failed to save. Check the API is running.</div>}
+    </div>
+  )
+}
+
 function App() {
   const [workflows, setWorkflows] = useState<WorkflowGauge[]>([])
   const [stats, setStats] = useState<Stats>({ total_workflows: 0, killed_count: 0, estimated_saved: 0 })
 
+  const fetchData = () => {
+    fetch('http://localhost:8000/workflows', {
+      headers: { 'X-API-Key': API_KEY }
+    })
+      .then((res) => res.json())
+      .then((data) => setWorkflows(data.workflows))
+      .catch((err) => console.error('Failed to fetch workflows:', err))
+
+    fetch('http://localhost:8000/stats', {
+      headers: { 'X-API-Key': API_KEY }
+    })
+      .then((res) => res.json())
+      .then((data) => setStats(data))
+      .catch((err) => console.error('Failed to fetch stats:', err))
+  }
+
   useEffect(() => {
-    const API_KEY = "ag_test_51f8a3c2e94b4d7a9c1f6e8b2a3d5c7f"
-
-    const fetchData = () => {
-      fetch('http://localhost:8000/workflows', {
-        headers: { 'X-API-Key': API_KEY }
-      })
-        .then((res) => res.json())
-        .then((data) => setWorkflows(data.workflows))
-        .catch((err) => console.error('Failed to fetch workflows:', err))
-
-      fetch('http://localhost:8000/stats', {
-        headers: { 'X-API-Key': API_KEY }
-      })
-        .then((res) => res.json())
-        .then((data) => setStats(data))
-        .catch((err) => console.error('Failed to fetch stats:', err))
-    }
-
     fetchData()
     const interval = setInterval(fetchData, 3000)
     return () => clearInterval(interval)
@@ -104,6 +167,8 @@ function App() {
           <div className="stat-value safe">${stats.estimated_saved.toFixed(6)}</div>
         </div>
       </div>
+
+      <ThresholdForm onSaved={fetchData} />
 
       <div className="section-title">Active workflows</div>
       {workflows.length === 0 ? (
