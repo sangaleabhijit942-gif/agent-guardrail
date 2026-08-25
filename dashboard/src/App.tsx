@@ -116,9 +116,92 @@ function ThresholdForm({ onSaved }: { onSaved: () => void }) {
   )
 }
 
+interface SignupResult {
+  customer_id: string
+  api_key: string
+  warning: string
+}
+
+function SignupPanel({ onClose }: { onClose: () => void }) {
+  const [name, setName] = useState('')
+  const [status, setStatus] = useState<'idle' | 'saving' | 'error'>('idle')
+  const [result, setResult] = useState<SignupResult | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const handleSignup = () => {
+    if (!name.trim()) return
+    setStatus('saving')
+
+    fetch('http://localhost:8000/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim() })
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Signup failed')
+        return res.json()
+      })
+      .then((data: SignupResult) => {
+        setResult(data)
+        setStatus('idle')
+      })
+      .catch(() => setStatus('error'))
+  }
+
+  const handleCopy = () => {
+    if (!result) return
+    navigator.clipboard.writeText(result.api_key)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  if (result) {
+    return (
+      <div className="signup-panel">
+        <div className="signup-result-warning">{result.warning}</div>
+        <div className="signup-field">
+          <div className="signup-field-label">Customer ID</div>
+          <div className="signup-field-value">{result.customer_id}</div>
+        </div>
+        <div className="signup-field">
+          <div className="signup-field-label">API Key</div>
+          <div className="signup-field-value signup-key">{result.api_key}</div>
+        </div>
+        <div className="signup-actions">
+          <button onClick={handleCopy} className="threshold-button">
+            {copied ? 'Copied!' : 'Copy API Key'}
+          </button>
+          <button onClick={onClose} className="signup-close-button">Done</button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="signup-panel">
+      <div className="signup-field-label">Your name</div>
+      <input
+        type="text"
+        placeholder="Jane Doe"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        className="threshold-input"
+      />
+      <div className="signup-actions">
+        <button onClick={handleSignup} disabled={status === 'saving'} className="threshold-button">
+          {status === 'saving' ? 'Creating account...' : 'Create account'}
+        </button>
+        <button onClick={onClose} className="signup-close-button">Cancel</button>
+      </div>
+      {status === 'error' && <div className="threshold-message threshold-error">Signup failed. Check the API is running.</div>}
+    </div>
+  )
+}
+
 function App() {
   const [workflows, setWorkflows] = useState<WorkflowGauge[]>([])
   const [stats, setStats] = useState<Stats>({ total_workflows: 0, killed_count: 0, estimated_saved: 0 })
+  const [showSignup, setShowSignup] = useState(false)
 
   const fetchData = () => {
     fetch('http://localhost:8000/workflows', {
@@ -144,9 +227,18 @@ function App() {
 
   return (
     <div className="dashboard">
-      <div className="greeting">
-        Good afternoon, <span>Abhijit</span>
+      <div className="dashboard-header">
+        <div className="greeting">
+          Good afternoon, <span>Abhijit</span>
+        </div>
+        {!showSignup && (
+          <button onClick={() => setShowSignup(true)} className="signup-open-button">
+            + New account
+          </button>
+        )}
       </div>
+
+      {showSignup && <SignupPanel onClose={() => setShowSignup(false)} />}
 
       <div className={`insight-card ${stats.killed_count > 0 ? 'insight-warn' : 'insight-safe'}`}>
         <span className="insight-dot" />
