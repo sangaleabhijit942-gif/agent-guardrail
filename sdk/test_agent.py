@@ -1,40 +1,18 @@
 from typing import TypedDict
 from langgraph.graph import StateGraph, START, END
 import time
-import requests
-import uuid
 from dotenv import load_dotenv
 import os
 import anthropic
+from agentguardrail import GuardrailClient, GuardrailKillSignal
 
 load_dotenv()
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-INGESTION_URL = "http://localhost:8000/events"
-TRACE_ID = str(uuid.uuid4())
-WORKFLOW_NAME = "test-agent-workflow"
-API_KEY = "ag_test_51f8a3c2e94b4d7a9c1f6e8b2a3d5c7f"
-
-def send_trace_event(node_name: str, step: int, message: str, tokens_in: int = 0, tokens_out: int = 0) -> dict:
-    try:
-        response = requests.post(
-            INGESTION_URL,
-            json={
-                "node_name": node_name,
-                "step": step,
-                "message": message,
-                "trace_id": TRACE_ID,
-                "workflow_name": WORKFLOW_NAME,
-                "tokens_in": tokens_in,
-                "tokens_out": tokens_out
-            },
-            headers={"X-API-Key": API_KEY},
-            timeout=5
-        )
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"[WARN] Failed to send trace event: {e}")
-        return {"status": "ok"}
+guardrail = GuardrailClient(
+    api_key="ag_test_51f8a3c2e94b4d7a9c1f6e8b2a3d5c7f",
+    workflow_name="test-agent-workflow"
+)
 
 class AgentState(TypedDict):
     step_count: int
@@ -42,10 +20,7 @@ class AgentState(TypedDict):
     retry_count: int
 
 def agent_node(state: AgentState) -> AgentState:
-    result = send_trace_event("Agent", state["step_count"], "Calling fake tool...")
-    if result.get("status") == "kill":
-        print(f"\n[STOPPED BY GUARDRAIL] Reason: {result.get('reason')}")
-        raise RuntimeError("Workflow killed by cost guardrail")
+    guardrail.track("Agent", state["step_count"], "Calling fake tool...")
     return {
         "step_count": state["step_count"] + 1,
         "message": "Calling fake tool...",
@@ -53,10 +28,7 @@ def agent_node(state: AgentState) -> AgentState:
     }
 
 def fake_tool_node(state: AgentState) -> AgentState:
-    result = send_trace_event("Fake Tool", state["step_count"], "Executing fake tool action...")
-    if result.get("status") == "kill":
-        print(f"\n[STOPPED BY GUARDRAIL] Reason: {result.get('reason')}")
-        raise RuntimeError("Workflow killed by cost guardrail")
+    guardrail.track("Fake Tool", state["step_count"], "Executing fake tool action...")
     time.sleep(0.3)
     return {
         "step_count": state["step_count"],
@@ -78,26 +50,17 @@ def validator_node(state: AgentState) -> AgentState:
     tokens_out = response.usage.output_tokens
     print(f"[LLM DECISION] {decision} (tokens: {tokens_in} in / {tokens_out} out)")
 
-    result = send_trace_event("Validator", state["step_count"], "Validating tool result...", tokens_in, tokens_out)
-    if result.get("status") == "kill":
-        print(f"\n[STOPPED BY GUARDRAIL] Reason: {result.get('reason')}")
-        raise RuntimeError("Workflow killed by cost guardrail")
+    guardrail.track("Validator", state["step_count"], "Validating tool result...", tokens_in, tokens_out)
 
     if "FAIL" in decision and state["retry_count"] < 2:
-        result = send_trace_event("Validator", state["step_count"], "Validation FAILED (LLM decision) — flagging retry")
-        if result.get("status") == "kill":
-            print(f"\n[STOPPED BY GUARDRAIL] Reason: {result.get('reason')}")
-            raise RuntimeError("Workflow killed by cost guardrail")
+        guardrail.track("Validator", state["step_count"], "Validation FAILED (LLM decision) — flagging retry")
         return {
             "step_count": state["step_count"],
             "message": "Validation failed, retrying...",
             "retry_count": state["retry_count"] + 1
         }
 
-    result = send_trace_event("Validator", state["step_count"], "Validation passed")
-    if result.get("status") == "kill":
-        print(f"\n[STOPPED BY GUARDRAIL] Reason: {result.get('reason')}")
-        raise RuntimeError("Workflow killed by cost guardrail")
+    guardrail.track("Validator", state["step_count"], "Validation passed")
     return {
         "step_count": state["step_count"],
         "message": "Validation passed",
@@ -135,11 +98,11 @@ workflow.add_conditional_edges(
 app = workflow.compile()
 
 if __name__ == "__main__":
-    print(f"=== Starting Local Agent Execution (trace_id: {TRACE_ID}) ===")
+    print(f"=== Starting Local Agent Execution (trace_id: {guardrail.trace_id}) ===")
     initial_state = {"step_count": 0, "message": "Start", "retry_count": 0}
     try:
         result = app.invoke(initial_state)
         print("\n=== Execution Complete ===")
         print("Final State Output:", result)
-    except RuntimeError as e:
-        print(f"\n=== Execution Halted: {e} ===")
+    except GuardrailKillSignal as e:
+        print(f"\n[STOPPED BY GUARDRAIL] Reason: {e}")
