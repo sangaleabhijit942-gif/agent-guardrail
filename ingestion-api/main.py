@@ -33,7 +33,9 @@ class TraceEvent(BaseModel):
 
 class ThresholdConfig(BaseModel):
     workflow_name: str
-    threshold: float
+    threshold_type: str = "cost"  # "cost" or "tokens"
+    threshold: float = 0.0
+    token_threshold: int = 0
 
 class SignupRequest(BaseModel):
     name: str
@@ -48,15 +50,16 @@ def get_current_customer(x_api_key: str = Header(...)) -> str:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
     return result.result_rows[0][0]
 
-def get_threshold(customer_id: str, workflow_name: str) -> float:
+def get_threshold_config(customer_id: str, workflow_name: str) -> dict:
     client = get_client()
     result = client.query(
-        "SELECT threshold FROM workflow_thresholds FINAL WHERE workflow_name = {name:String} AND customer_id = {cust:String}",
+        "SELECT threshold, threshold_type, token_threshold FROM workflow_thresholds FINAL WHERE workflow_name = {name:String} AND customer_id = {cust:String}",
         parameters={"name": workflow_name, "cust": customer_id}
     )
     if result.result_rows:
-        return result.result_rows[0][0]
-    return KILL_THRESHOLD
+        threshold, threshold_type, token_threshold = result.result_rows[0]
+        return {"threshold": threshold, "threshold_type": threshold_type, "token_threshold": token_threshold}
+    return {"threshold": KILL_THRESHOLD, "threshold_type": "cost", "token_threshold": 0}
 
 @app.post("/signup")
 async def signup(req: SignupRequest):
@@ -81,15 +84,22 @@ async def set_threshold(config: ThresholdConfig, customer_id: str = Depends(get_
     client = get_client()
     client.insert(
         "workflow_thresholds",
-        [[config.workflow_name, config.threshold, datetime.now(UTC), customer_id]],
-        column_names=["workflow_name", "threshold", "updated_at", "customer_id"]
+        [[config.workflow_name, config.threshold, datetime.now(UTC), customer_id, config.threshold_type, config.token_threshold]],
+        column_names=["workflow_name", "threshold", "updated_at", "customer_id", "threshold_type", "token_threshold"]
     )
-    return {"status": "ok", "workflow_name": config.workflow_name, "threshold": config.threshold}
+    return {
+        "status": "ok",
+        "workflow_name": config.workflow_name,
+        "threshold_type": config.threshold_type,
+        "threshold": config.threshold,
+        "token_threshold": config.token_threshold
+    }
 
 @app.post("/events")
 async def receive_event(event: TraceEvent, customer_id: str = Depends(get_current_customer)):
     client = get_client()
     event_cost = (event.tokens_in * INPUT_COST_PER_TOKEN) + (event.tokens_out * OUTPUT_COST_PER_TOKEN)
+    event_tokens = event.tokens_in + event.tokens_out
 
     client.insert(
         "agent_events",
@@ -98,18 +108,27 @@ async def receive_event(event: TraceEvent, customer_id: str = Depends(get_curren
     )
 
     result = client.query(
-        "SELECT SUM(cost) FROM agent_events WHERE trace_id = {trace_id:String} AND customer_id = {cust:String}",
+        "SELECT SUM(cost), SUM(tokens_in) + SUM(tokens_out) FROM agent_events WHERE trace_id = {trace_id:String} AND customer_id = {cust:String}",
         parameters={"trace_id": event.trace_id, "cust": customer_id}
     )
-    current_cost = result.result_rows[0][0] or 0.0
+    current_cost, current_tokens = result.result_rows[0]
+    current_cost = current_cost or 0.0
+    current_tokens = current_tokens or 0
 
-    threshold = get_threshold(customer_id, event.workflow_name)
+    config = get_threshold_config(customer_id, event.workflow_name)
 
-    print(f"[RECEIVED] {datetime.now(UTC).isoformat()} | Customer: {customer_id} | Node: {event.node_name} | Step: {event.step} | {event.message} | Tokens: {event.tokens_in}in/{event.tokens_out}out | Cost so far: ${current_cost:.6f} | Threshold: ${threshold:.6f}")
-
-    if current_cost >= threshold:
-        print(f"[KILL SIGNAL] Trace '{event.trace_id}' exceeded ${threshold:.6f} — signaling kill")
-        return {"status": "kill", "reason": f"Cost threshold exceeded: ${current_cost:.6f}"}
+    if config["threshold_type"] == "tokens":
+        limit_reached = current_tokens >= config["token_threshold"]
+        print(f"[RECEIVED] {datetime.now(UTC).isoformat()} | Customer: {customer_id} | Node: {event.node_name} | Step: {event.step} | {event.message} | Tokens: {event.tokens_in}in/{event.tokens_out}out | Total tokens: {current_tokens} | Token limit: {config['token_threshold']}")
+        if limit_reached:
+            print(f"[KILL SIGNAL] Trace '{event.trace_id}' exceeded {config['token_threshold']} tokens — signaling kill")
+            return {"status": "kill", "reason": f"Token threshold exceeded: {current_tokens} tokens"}
+    else:
+        limit_reached = current_cost >= config["threshold"]
+        print(f"[RECEIVED] {datetime.now(UTC).isoformat()} | Customer: {customer_id} | Node: {event.node_name} | Step: {event.step} | {event.message} | Tokens: {event.tokens_in}in/{event.tokens_out}out | Cost so far: ${current_cost:.6f} | Threshold: ${config['threshold']:.6f}")
+        if limit_reached:
+            print(f"[KILL SIGNAL] Trace '{event.trace_id}' exceeded ${config['threshold']:.6f} — signaling kill")
+            return {"status": "kill", "reason": f"Cost threshold exceeded: ${current_cost:.6f}"}
 
     return {"status": "ok"}
 
