@@ -55,12 +55,28 @@ function buildInsight(stats: Stats): string {
 
 function ThresholdForm({ onSaved }: { onSaved: () => void }) {
   const [workflowName, setWorkflowName] = useState('')
-  const [threshold, setThreshold] = useState('')
+  const [thresholdType, setThresholdType] = useState<'cost' | 'tokens'>('cost')
+  const [value, setValue] = useState('')
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
 
   const handleSave = () => {
-    if (!workflowName.trim() || !threshold.trim()) return
+    if (!workflowName.trim() || !value.trim()) return
     setStatus('saving')
+
+    const body =
+      thresholdType === 'cost'
+        ? {
+            workflow_name: workflowName.trim(),
+            threshold_type: 'cost',
+            threshold: parseFloat(value),
+            token_threshold: 0
+          }
+        : {
+            workflow_name: workflowName.trim(),
+            threshold_type: 'tokens',
+            threshold: 0,
+            token_threshold: parseInt(value, 10)
+          }
 
     fetch('http://localhost:8000/thresholds', {
       method: 'POST',
@@ -68,10 +84,7 @@ function ThresholdForm({ onSaved }: { onSaved: () => void }) {
         'Content-Type': 'application/json',
         'X-API-Key': API_KEY
       },
-      body: JSON.stringify({
-        workflow_name: workflowName.trim(),
-        threshold: parseFloat(threshold)
-      })
+      body: JSON.stringify(body)
     })
       .then((res) => {
         if (!res.ok) throw new Error('Request failed')
@@ -80,7 +93,7 @@ function ThresholdForm({ onSaved }: { onSaved: () => void }) {
       .then(() => {
         setStatus('saved')
         setWorkflowName('')
-        setThreshold('')
+        setValue('')
         onSaved()
         setTimeout(() => setStatus('idle'), 2000)
       })
@@ -90,6 +103,20 @@ function ThresholdForm({ onSaved }: { onSaved: () => void }) {
   return (
     <div className="threshold-form">
       <div className="section-title">Set a workflow threshold</div>
+      <div className="threshold-type-toggle">
+        <button
+          className={`threshold-type-btn ${thresholdType === 'cost' ? 'threshold-type-active' : ''}`}
+          onClick={() => setThresholdType('cost')}
+        >
+          Cost ($)
+        </button>
+        <button
+          className={`threshold-type-btn ${thresholdType === 'tokens' ? 'threshold-type-active' : ''}`}
+          onClick={() => setThresholdType('tokens')}
+        >
+          Tokens
+        </button>
+      </div>
       <div className="threshold-form-row">
         <input
           type="text"
@@ -100,10 +127,10 @@ function ThresholdForm({ onSaved }: { onSaved: () => void }) {
         />
         <input
           type="number"
-          step="0.0001"
-          placeholder="threshold ($)"
-          value={threshold}
-          onChange={(e) => setThreshold(e.target.value)}
+          step={thresholdType === 'cost' ? '0.0001' : '1'}
+          placeholder={thresholdType === 'cost' ? 'threshold ($)' : 'threshold (tokens)'}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
           className="threshold-input threshold-input-narrow"
         />
         <button onClick={handleSave} disabled={status === 'saving'} className="threshold-button">

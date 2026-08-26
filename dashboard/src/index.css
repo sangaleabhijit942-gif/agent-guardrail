@@ -104,15 +104,29 @@ body {
 }
 
 .gauge-track {
-  height: 8px;
+  position: relative;
+  height: 18px;
   background: var(--bg);
+  border: 2px solid var(--border);
   border-radius: 4px;
   overflow: hidden;
+  margin-right: 12px;
+}
+
+.gauge-track::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: -8px;
+  transform: translateY(-50%);
+  width: 5px;
+  height: 8px;
+  background: var(--border);
+  border-radius: 0 2px 2px 0;
 }
 
 .gauge-fill {
   height: 100%;
-  border-radius: 4px;
   transition: width 0.3s ease;
 }
 
@@ -414,4 +428,26 @@ body {
 
 .landing-footer {
   text-align: center;
+}
+.threshold-type-toggle {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.threshold-type-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 6px;
+  padding: 6px 16px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.threshold-type-active {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: #1a1300;
+  font-weight: 600;
 }
