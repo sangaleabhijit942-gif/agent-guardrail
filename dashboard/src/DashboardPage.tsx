@@ -33,7 +33,9 @@ function Gauge({ workflow }: { workflow: WorkflowGauge }) {
       <div className="gauge-header">
         <span className="gauge-name">{workflow.trace_id}</span>
         <span className="gauge-cost">
-          ${workflow.cost.toFixed(6)} / ${workflow.limit.toFixed(6)}
+         {workflow.threshold_type === 'tokens'
+          ? `${workflow.current_value} / ${workflow.limit} tokens`
+         : `$${workflow.current_value.toFixed(6)} / $${workflow.limit.toFixed(6)}`}
         </span>
       </div>
       <div className="gauge-track">
