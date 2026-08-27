@@ -33,7 +33,7 @@ class TraceEvent(BaseModel):
 
 class ThresholdConfig(BaseModel):
     workflow_name: str
-    threshold_type: str = "cost"  # "cost" or "tokens"
+    threshold_type: str = "cost"
     threshold: float = 0.0
     token_threshold: int = 0
 
@@ -60,6 +60,49 @@ def get_threshold_config(customer_id: str, workflow_name: str) -> dict:
         threshold, threshold_type, token_threshold = result.result_rows[0]
         return {"threshold": threshold, "threshold_type": threshold_type, "token_threshold": token_threshold}
     return {"threshold": KILL_THRESHOLD, "threshold_type": "cost", "token_threshold": 0}
+
+def classify_retry_pattern(intervals: list) -> dict:
+    """
+    Classify why repeated calls are happening, based purely on timing intervals
+    between events. Uses no customer code or content — only timestamps already stored.
+    """
+    if len(intervals) < 3:
+        return {"pattern": "insufficient_data", "confidence": "none", "description": "Not enough repeated calls to classify reliably."}
+
+    avg = sum(intervals) / len(intervals)
+
+    if all(i < 1.0 for i in intervals):
+        return {
+            "pattern": "tight_loop",
+            "confidence": "high",
+            "description": "All calls arriving within a second of each other. Consistent with a loop retrying immediately, often where an error is being caught and ignored."
+        }
+
+    is_monotonic_growth = all(
+        intervals[i] >= intervals[i - 1] * 1.5
+        for i in range(1, len(intervals))
+    )
+    if is_monotonic_growth:
+        return {
+            "pattern": "exponential_backoff",
+            "confidence": "high",
+            "description": "Intervals between calls increase geometrically with each attempt. Consistent with automatic retry logic in an HTTP client or agent framework."
+        }
+
+    variance = sum((i - avg) ** 2 for i in intervals) / len(intervals)
+    std_dev = variance ** 0.5
+    if avg > 10 and std_dev < avg * 0.15:
+        return {
+            "pattern": "periodic_restart",
+            "confidence": "medium",
+            "description": f"Calls arriving at a consistent ~{int(avg)}s interval. Consistent with a process being restarted on a schedule, such as by a supervisor or scheduler."
+        }
+
+    return {
+        "pattern": "irregular",
+        "confidence": "low",
+        "description": "Repeated calls detected, but the timing does not match a known automated retry signature. This may indicate manual runs, variable workload, or a pattern not yet recognised."
+    }
 
 @app.post("/signup")
 async def signup(req: SignupRequest):
@@ -99,12 +142,11 @@ async def set_threshold(config: ThresholdConfig, customer_id: str = Depends(get_
 async def receive_event(event: TraceEvent, customer_id: str = Depends(get_current_customer)):
     client = get_client()
     event_cost = (event.tokens_in * INPUT_COST_PER_TOKEN) + (event.tokens_out * OUTPUT_COST_PER_TOKEN)
-    event_tokens = event.tokens_in + event.tokens_out
 
     client.insert(
         "agent_events",
-        [[event.trace_id, event.node_name, event.step, event.message, event.tokens_in, event.tokens_out, event_cost, datetime.now(UTC), customer_id]],
-        column_names=["trace_id", "node_name", "step", "message", "tokens_in", "tokens_out", "cost", "timestamp", "customer_id"]
+        [[event.trace_id, event.node_name, event.step, event.message, event.tokens_in, event.tokens_out, event_cost, datetime.now(UTC), customer_id, event.workflow_name]],
+        column_names=["trace_id", "node_name", "step", "message", "tokens_in", "tokens_out", "cost", "timestamp", "customer_id", "workflow_name"]
     )
 
     result = client.query(
@@ -136,17 +178,46 @@ async def receive_event(event: TraceEvent, customer_id: str = Depends(get_curren
 async def list_workflows(customer_id: str = Depends(get_current_customer)):
     client = get_client()
     result = client.query(
-        "SELECT trace_id, SUM(cost) as total_cost FROM agent_events WHERE customer_id = {cust:String} GROUP BY trace_id",
+        """
+        SELECT
+            trace_id,
+            any(workflow_name) as workflow_name,
+            SUM(cost) as total_cost,
+            SUM(tokens_in) + SUM(tokens_out) as total_tokens
+        FROM agent_events
+        WHERE customer_id = {cust:String}
+        GROUP BY trace_id
+        """,
         parameters={"cust": customer_id}
     )
+
     workflows = []
     for row in result.result_rows:
-        trace_id, cost = row
+        trace_id, workflow_name, cost, tokens = row
+        cost = cost or 0.0
+        tokens = tokens or 0
+        config = get_threshold_config(customer_id, workflow_name)
+
+        if config["threshold_type"] == "tokens":
+            limit_value = config["token_threshold"]
+            current_value = tokens
+            status = "killed" if tokens >= config["token_threshold"] else "active"
+            display_type = "tokens"
+        else:
+            limit_value = config["threshold"]
+            current_value = cost
+            status = "killed" if cost >= config["threshold"] else "active"
+            display_type = "cost"
+
         workflows.append({
             "trace_id": trace_id,
+            "workflow_name": workflow_name,
+            "threshold_type": display_type,
             "cost": round(cost, 6),
-            "limit": KILL_THRESHOLD,
-            "status": "killed" if cost >= KILL_THRESHOLD else "active"
+            "tokens": tokens,
+            "current_value": current_value,
+            "limit": limit_value,
+            "status": status
         })
     return {"workflows": workflows}
 
@@ -154,14 +225,78 @@ async def list_workflows(customer_id: str = Depends(get_current_customer)):
 async def get_stats(customer_id: str = Depends(get_current_customer)):
     client = get_client()
     result = client.query(
-        "SELECT trace_id, SUM(cost) as total_cost FROM agent_events WHERE customer_id = {cust:String} GROUP BY trace_id",
+        """
+        SELECT
+            trace_id,
+            any(workflow_name) as workflow_name,
+            SUM(cost) as total_cost,
+            SUM(tokens_in) + SUM(tokens_out) as total_tokens
+        FROM agent_events
+        WHERE customer_id = {cust:String}
+        GROUP BY trace_id
+        """,
         parameters={"cust": customer_id}
     )
-    all_costs = [row[1] for row in result.result_rows]
-    killed = [c for c in all_costs if c >= KILL_THRESHOLD]
-    total_saved = len(killed) * KILL_THRESHOLD
+
+    killed_count = 0
+    estimated_saved = 0.0
+    for row in result.result_rows:
+        trace_id, workflow_name, cost, tokens = row
+        cost = cost or 0.0
+        tokens = tokens or 0
+        config = get_threshold_config(customer_id, workflow_name)
+
+        if config["threshold_type"] == "tokens":
+            if tokens >= config["token_threshold"]:
+                killed_count += 1
+                estimated_saved += config["token_threshold"] * ((INPUT_COST_PER_TOKEN + OUTPUT_COST_PER_TOKEN) / 2)
+        else:
+            if cost >= config["threshold"]:
+                killed_count += 1
+                estimated_saved += config["threshold"]
+
     return {
-        "total_workflows": len(all_costs),
-        "killed_count": len(killed),
-        "estimated_saved": round(total_saved, 6)
+        "total_workflows": len(result.result_rows),
+        "killed_count": killed_count,
+        "estimated_saved": round(estimated_saved, 6)
+    }
+
+@app.get("/diagnostics/{trace_id}")
+async def get_trace_diagnostics(trace_id: str, customer_id: str = Depends(get_current_customer)):
+    client = get_client()
+
+    result = client.query(
+        """
+        SELECT timestamp, node_name, message
+        FROM agent_events
+        WHERE trace_id = {trace_id:String} AND customer_id = {cust:String}
+        ORDER BY timestamp ASC
+        """,
+        parameters={"trace_id": trace_id, "cust": customer_id}
+    )
+
+    rows = result.result_rows
+    if len(rows) < 2:
+        return {
+            "trace_id": trace_id,
+            "event_count": len(rows),
+            "analysis": {"pattern": "insufficient_data", "confidence": "none", "description": "Not enough events to analyze."}
+        }
+
+    timestamps = [row[0] for row in rows]
+    intervals = [
+        (timestamps[i] - timestamps[i - 1]).total_seconds()
+        for i in range(1, len(timestamps))
+    ]
+
+    analysis = classify_retry_pattern(intervals)
+
+    return {
+        "trace_id": trace_id,
+        "event_count": len(rows),
+        "first_event": timestamps[0].isoformat(),
+        "last_event": timestamps[-1].isoformat(),
+        "duration_seconds": round((timestamps[-1] - timestamps[0]).total_seconds(), 2),
+        "intervals_seconds": [round(i, 3) for i in intervals],
+        "analysis": analysis
     }
