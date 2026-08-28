@@ -5,7 +5,10 @@ type GaugeStatus = 'safe' | 'warn' | 'danger'
 interface WorkflowGauge {
   trace_id: string
   cost: number
+  tokens: number
+  current_value: number
   limit: number
+  threshold_type: string
   status: string
 }
 
@@ -16,6 +19,7 @@ interface Stats {
 }
 
 const API_KEY = "ag_test_51f8a3c2e94b4d7a9c1f6e8b2a3d5c7f"
+const API_BASE_URL = "https://agent-guardrail-api-b3ex.onrender.com"
 
 function getStatus(pct: number): GaugeStatus {
   if (pct >= 100) return 'danger'
@@ -24,7 +28,7 @@ function getStatus(pct: number): GaugeStatus {
 }
 
 function Gauge({ workflow }: { workflow: WorkflowGauge }) {
-  const pct = Math.min((workflow.cost / workflow.limit) * 100, 100)
+  const pct = Math.min((workflow.current_value / workflow.limit) * 100, 100)
   const status = getStatus(pct)
   const color = status === 'danger' ? 'var(--danger)' : status === 'warn' ? 'var(--warn)' : 'var(--safe)'
 
@@ -33,9 +37,9 @@ function Gauge({ workflow }: { workflow: WorkflowGauge }) {
       <div className="gauge-header">
         <span className="gauge-name">{workflow.trace_id}</span>
         <span className="gauge-cost">
-         {workflow.threshold_type === 'tokens'
-          ? `${workflow.current_value} / ${workflow.limit} tokens`
-         : `$${workflow.current_value.toFixed(6)} / $${workflow.limit.toFixed(6)}`}
+          {workflow.threshold_type === 'tokens'
+            ? `${workflow.current_value} / ${workflow.limit} tokens`
+            : `$${workflow.current_value.toFixed(6)} / $${workflow.limit.toFixed(6)}`}
         </span>
       </div>
       <div className="gauge-track">
@@ -80,7 +84,7 @@ function ThresholdForm({ onSaved }: { onSaved: () => void }) {
             token_threshold: parseInt(value, 10)
           }
 
-    fetch('http://localhost:8000/thresholds', {
+    fetch(`${API_BASE_URL}/thresholds`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -161,7 +165,7 @@ function SignupPanel({ onClose }: { onClose: () => void }) {
     if (!name.trim()) return
     setStatus('saving')
 
-    fetch('http://localhost:8000/signup', {
+    fetch(`${API_BASE_URL}/signup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: name.trim() })
@@ -233,14 +237,14 @@ function DashboardPage() {
   const [showSignup, setShowSignup] = useState(false)
 
   const fetchData = () => {
-    fetch('http://localhost:8000/workflows', {
+    fetch(`${API_BASE_URL}/workflows`, {
       headers: { 'X-API-Key': API_KEY }
     })
       .then((res) => res.json())
       .then((data) => setWorkflows(data.workflows))
       .catch((err) => console.error('Failed to fetch workflows:', err))
 
-    fetch('http://localhost:8000/stats', {
+    fetch(`${API_BASE_URL}/stats`, {
       headers: { 'X-API-Key': API_KEY }
     })
       .then((res) => res.json())
@@ -250,7 +254,7 @@ function DashboardPage() {
 
   useEffect(() => {
     fetchData()
-    const interval = setInterval(fetchData, 3000)
+    const interval = setInterval(fetchData, 10000)
     return () => clearInterval(interval)
   }, [])
 
