@@ -61,6 +61,17 @@ def get_threshold_config(customer_id: str, workflow_name: str) -> dict:
         return {"threshold": threshold, "threshold_type": threshold_type, "token_threshold": token_threshold}
     return {"threshold": KILL_THRESHOLD, "threshold_type": "cost", "token_threshold": 0}
 
+@app.get("/threshold-lookup")
+async def threshold_lookup(workflow_name: str, customer_id: str = Depends(get_current_customer)):
+    """
+    Lightweight endpoint for SDK background sync — returns just the threshold
+    config for one workflow, in the shape the SDK's local cache expects.
+    """
+    config = get_threshold_config(customer_id, workflow_name)
+    if config["threshold_type"] == "tokens":
+        return {"threshold_type": "tokens", "threshold": config["token_threshold"]}
+    return {"threshold_type": "cost", "threshold": config["threshold"]}
+
 def classify_retry_pattern(intervals: list) -> dict:
     """
     Classify why repeated calls are happening, based purely on timing intervals
