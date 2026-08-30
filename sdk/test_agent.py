@@ -11,7 +11,8 @@ client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 guardrail = GuardrailClient(
     api_key="ag_test_51f8a3c2e94b4d7a9c1f6e8b2a3d5c7f",
-    workflow_name="test-agent-workflow"
+    workflow_name="test-agent-workflow",
+    timeout=15
 )
 
 class AgentState(TypedDict):
