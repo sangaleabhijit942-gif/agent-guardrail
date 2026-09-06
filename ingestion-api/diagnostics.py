@@ -1,8 +1,52 @@
 from fastapi import APIRouter, Depends
+from collections import defaultdict
 from clickhouse_client import get_client
 from auth import get_current_customer
 
 router = APIRouter()
+
+
+def classify_token_growth(events_with_tokens: list) -> dict | None:
+    """
+    Checks for context-window saturation: input tokens growing steadily
+    across real LLM calls, grouped by node_name. Mixed multi-node traces
+    (e.g. a Drafter + Auditor pipeline) must be checked per-node, since
+    each node's own baseline size differs and mixing them hides real
+    growth within either one. Returns None if no node shows this pattern,
+    so the caller can fall through to timing-based checks.
+    """
+    by_node = defaultdict(list)
+    for node_name, tokens_in in events_with_tokens:
+        if tokens_in and tokens_in > 0:
+            by_node[node_name].append(tokens_in)
+
+    for node_name, token_sizes in by_node.items():
+        if len(token_sizes) < 2:
+            continue
+
+        is_strictly_growing = all(
+            token_sizes[i] < token_sizes[i + 1]
+            for i in range(len(token_sizes) - 1)
+        )
+        if not is_strictly_growing:
+            continue
+
+        growth_ratio = (token_sizes[-1] - token_sizes[0]) / max(token_sizes[0], 1)
+        if growth_ratio <= 2.0:
+            continue
+
+        return {
+            "pattern": "context_saturation",
+            "confidence": "high",
+            "description": (
+                f"Node '{node_name}' shows input tokens growing steadily across "
+                f"{len(token_sizes)} calls ({token_sizes[0]} \u2192 {token_sizes[-1]}, "
+                f"a {growth_ratio:.1f}x increase). Consistent with conversation history "
+                "or context accumulating without being trimmed or summarized between calls."
+            )
+        }
+
+    return None
 
 
 def classify_retry_pattern(intervals: list) -> dict:
@@ -55,7 +99,7 @@ async def get_trace_diagnostics(trace_id: str, customer_id: str = Depends(get_cu
 
     result = client.query(
         """
-        SELECT timestamp, node_name, message
+        SELECT timestamp, node_name, message, tokens_in
         FROM agent_events
         WHERE trace_id = {trace_id:String} AND customer_id = {cust:String}
         ORDER BY timestamp ASC
@@ -77,7 +121,11 @@ async def get_trace_diagnostics(trace_id: str, customer_id: str = Depends(get_cu
         for i in range(1, len(timestamps))
     ]
 
-    analysis = classify_retry_pattern(intervals)
+    events_with_tokens = [(row[1], row[3]) for row in rows]  # (node_name, tokens_in)
+
+    analysis = classify_token_growth(events_with_tokens)
+    if analysis is None:
+        analysis = classify_retry_pattern(intervals)
 
     return {
         "trace_id": trace_id,
