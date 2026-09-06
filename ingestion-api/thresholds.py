@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from datetime import datetime, UTC
 from clickhouse_client import get_client
@@ -39,8 +39,33 @@ async def threshold_lookup(workflow_name: str, customer_id: str = Depends(get_cu
     return {"threshold_type": "cost", "threshold": config["threshold"]}
 
 
+
 @router.post("/thresholds")
 async def set_threshold(config: ThresholdConfig, customer_id: str = Depends(get_current_customer)):
+    # Real bug caught in testing: silently accepting the wrong field for the
+    # given threshold_type saved a 0 with no warning. Validate explicitly.
+    if config.threshold_type not in ("cost", "tokens"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"threshold_type must be 'cost' or 'tokens', got '{config.threshold_type}'"
+        )
+
+    if config.threshold_type == "tokens" and config.token_threshold <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail="threshold_type is 'tokens' but token_threshold was not set (or is 0). "
+                    "Did you mean to send 'threshold' instead? For token-type thresholds, "
+                    "set the 'token_threshold' field, not 'threshold'."
+        )
+
+    if config.threshold_type == "cost" and config.threshold <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail="threshold_type is 'cost' but threshold was not set (or is 0). "
+                    "Did you mean to send 'token_threshold' instead? For cost-type thresholds, "
+                    "set the 'threshold' field, not 'token_threshold'."
+        )
+
     client = get_client()
     client.insert(
         "workflow_thresholds",
