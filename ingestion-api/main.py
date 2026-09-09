@@ -7,6 +7,7 @@ from thresholds import router as thresholds_router
 from events import router as events_router
 from reporting import router as reporting_router
 from diagnostics import router as diagnostics_router
+from explain import router as explain_router
 
 # Re-exported for callers that import these from `main` (e.g. test_main.py).
 from config import INPUT_COST_PER_TOKEN, OUTPUT_COST_PER_TOKEN, KILL_THRESHOLD  # noqa: F401
@@ -27,3 +28,4 @@ app.include_router(thresholds_router)
 app.include_router(events_router)
 app.include_router(reporting_router)
 app.include_router(diagnostics_router)
+app.include_router(explain_router)
