@@ -16,7 +16,8 @@ async def list_workflows(customer_id: str = Depends(get_current_customer)):
             trace_id,
             any(workflow_name) as workflow_name,
             SUM(cost) as total_cost,
-            SUM(tokens_in) + SUM(tokens_out) as total_tokens
+            SUM(tokens_in) + SUM(tokens_out) as total_tokens,
+            COUNT(*) as event_count
         FROM agent_events
         WHERE customer_id = {cust:String}
         GROUP BY trace_id
@@ -26,9 +27,10 @@ async def list_workflows(customer_id: str = Depends(get_current_customer)):
 
     workflows = []
     for row in result.result_rows:
-        trace_id, workflow_name, cost, tokens = row
+        trace_id, workflow_name, cost, tokens, event_count = row
         cost = cost or 0.0
         tokens = tokens or 0
+        event_count = event_count or 1  # avoid division by zero, though GROUP BY guarantees >=1
         config = get_threshold_config(customer_id, workflow_name)
 
         if config["threshold_type"] == "tokens":
@@ -50,7 +52,10 @@ async def list_workflows(customer_id: str = Depends(get_current_customer)):
             "tokens": tokens,
             "current_value": current_value,
             "limit": limit_value,
-            "status": status
+            "status": status,
+            "event_count": event_count,
+            "avg_tokens_per_call": round(tokens / event_count, 1),
+            "avg_cost_per_call": round(cost / event_count, 6)
         })
     return {"workflows": workflows}
 
