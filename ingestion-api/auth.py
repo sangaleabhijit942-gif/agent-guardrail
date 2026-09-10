@@ -2,6 +2,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 from datetime import datetime, UTC
 from clickhouse_client import get_client
+from auth_cache import get_cached_customer_id, set_cached_customer_id
 import secrets
 import uuid
 
@@ -13,6 +14,10 @@ class SignupRequest(BaseModel):
 
 
 def get_current_customer(x_api_key: str = Header(...)) -> str:
+    cached_customer_id = get_cached_customer_id(x_api_key)
+    if cached_customer_id is not None:
+        return cached_customer_id
+
     client = get_client()
     result = client.query(
         "SELECT customer_id FROM customers FINAL WHERE api_key = {key:String}",
@@ -20,7 +25,10 @@ def get_current_customer(x_api_key: str = Header(...)) -> str:
     )
     if not result.result_rows:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
-    return result.result_rows[0][0]
+
+    customer_id = result.result_rows[0][0]
+    set_cached_customer_id(x_api_key, customer_id)
+    return customer_id
 
 
 @router.post("/signup")

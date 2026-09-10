@@ -1,15 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 type GaugeStatus = 'safe' | 'warn' | 'danger'
 
 interface WorkflowGauge {
   trace_id: string
+  workflow_name: string
   cost: number
   tokens: number
   current_value: number
   limit: number
   threshold_type: string
   status: string
+  event_count: number
+  avg_tokens_per_call: number
+  avg_cost_per_call: number
 }
 
 interface Stats {
@@ -18,8 +22,31 @@ interface Stats {
   estimated_saved: number
 }
 
+interface Explanation {
+  trace_id: string
+  rule_based_diagnosis: {
+    pattern: string
+    confidence: string
+    description: string
+  }
+  explanation: string
+}
+
 const API_KEY = "ag_test_51f8a3c2e94b4d7a9c1f6e8b2a3d5c7f"
 const API_BASE_URL = "https://agent-guardrail-api-b3ex.onrender.com"
+const POLL_FETCH_TIMEOUT_MS = 6000
+
+// Aborts whatever request is still sitting in `controllerRef` before starting
+// a new one, so polling never lets requests for the same endpoint queue up,
+// and aborts this request itself if it hangs past POLL_FETCH_TIMEOUT_MS.
+function fetchWithTimeout(url: string, controllerRef: { current: AbortController | null }, init?: RequestInit) {
+  controllerRef.current?.abort()
+  const controller = new AbortController()
+  controllerRef.current = controller
+  const timeoutId = setTimeout(() => controller.abort(), POLL_FETCH_TIMEOUT_MS)
+
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timeoutId))
+}
 
 function getStatus(pct: number): GaugeStatus {
   if (pct >= 100) return 'danger'
@@ -27,15 +54,61 @@ function getStatus(pct: number): GaugeStatus {
   return 'safe'
 }
 
+function ExplainPanel({ traceId, onClose }: { traceId: string; onClose: () => void }) {
+  const [data, setData] = useState<Explanation | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/explain/${traceId}`, {
+      headers: { 'X-API-Key': API_KEY }
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Explain failed')
+        return res.json()
+      })
+      .then((d: Explanation) => {
+        setData(d)
+        setLoading(false)
+      })
+      .catch(() => {
+        setError(true)
+        setLoading(false)
+      })
+  }, [traceId])
+
+  return (
+    <div className="explain-panel">
+      {loading && <div className="explain-loading">Analyzing what happened...</div>}
+      {error && <div className="threshold-message threshold-error">Could not load explanation.</div>}
+      {data && (
+        <>
+          <div className="explain-pattern">
+            Pattern: <strong>{data.rule_based_diagnosis.pattern}</strong> ({data.rule_based_diagnosis.confidence} confidence)
+          </div>
+          <div className="explain-text">{data.explanation}</div>
+        </>
+      )}
+      <button onClick={onClose} className="signup-close-button">Close</button>
+    </div>
+  )
+}
+
 function Gauge({ workflow }: { workflow: WorkflowGauge }) {
   const pct = Math.min((workflow.current_value / workflow.limit) * 100, 100)
   const status = getStatus(pct)
   const color = status === 'danger' ? 'var(--danger)' : status === 'warn' ? 'var(--warn)' : 'var(--safe)'
+  const [showExplain, setShowExplain] = useState(false)
+
+  const avgLabel =
+    workflow.threshold_type === 'tokens'
+      ? `~${workflow.avg_tokens_per_call.toLocaleString(undefined, { maximumFractionDigits: 1 })} tokens/call`
+      : `~$${workflow.avg_cost_per_call.toFixed(6)}/call`
 
   return (
     <div className="gauge-row">
       <div className="gauge-header">
-        <span className="gauge-name">{workflow.trace_id}</span>
+        <span className="gauge-name">{workflow.workflow_name}</span>
         <span className="gauge-cost">
           {workflow.threshold_type === 'tokens'
             ? `${workflow.current_value} / ${workflow.limit} tokens`
@@ -45,6 +118,15 @@ function Gauge({ workflow }: { workflow: WorkflowGauge }) {
       <div className="gauge-track">
         <div className="gauge-fill" style={{ width: `${pct}%`, background: color }} />
       </div>
+      <div className="gauge-meta">
+        <span className="gauge-avg">{avgLabel} · {workflow.event_count} events</span>
+        {workflow.status === 'killed' && (
+          <button className="gauge-explain-btn" onClick={() => setShowExplain(!showExplain)}>
+            {showExplain ? 'Hide reason' : 'Why did this stop?'}
+          </button>
+        )}
+      </div>
+      {showExplain && <ExplainPanel traceId={workflow.trace_id} onClose={() => setShowExplain(false)} />}
     </div>
   )
 }
@@ -235,21 +317,44 @@ function DashboardPage() {
   const [workflows, setWorkflows] = useState<WorkflowGauge[]>([])
   const [stats, setStats] = useState<Stats>({ total_workflows: 0, killed_count: 0, estimated_saved: 0 })
   const [showSignup, setShowSignup] = useState(false)
+  const [workflowsError, setWorkflowsError] = useState(false)
+  const [statsError, setStatsError] = useState(false)
+
+  const workflowsAbortRef = useRef<AbortController | null>(null)
+  const statsAbortRef = useRef<AbortController | null>(null)
 
   const fetchData = () => {
-    fetch(`${API_BASE_URL}/workflows`, {
+    fetchWithTimeout(`${API_BASE_URL}/workflows`, workflowsAbortRef, {
       headers: { 'X-API-Key': API_KEY }
     })
-      .then((res) => res.json())
-      .then((data) => setWorkflows(data.workflows))
-      .catch((err) => console.error('Failed to fetch workflows:', err))
+      .then((res) => {
+        if (!res.ok) throw new Error('Workflows fetch failed')
+        return res.json()
+      })
+      .then((data) => {
+        setWorkflows(data.workflows)
+        setWorkflowsError(false)
+      })
+      .catch((err) => {
+        console.error('Failed to fetch workflows:', err)
+        setWorkflowsError(true)
+      })
 
-    fetch(`${API_BASE_URL}/stats`, {
+    fetchWithTimeout(`${API_BASE_URL}/stats`, statsAbortRef, {
       headers: { 'X-API-Key': API_KEY }
     })
-      .then((res) => res.json())
-      .then((data) => setStats(data))
-      .catch((err) => console.error('Failed to fetch stats:', err))
+      .then((res) => {
+        if (!res.ok) throw new Error('Stats fetch failed')
+        return res.json()
+      })
+      .then((data) => {
+        setStats(data)
+        setStatsError(false)
+      })
+      .catch((err) => {
+        console.error('Failed to fetch stats:', err)
+        setStatsError(true)
+      })
   }
 
   useEffect(() => {
@@ -273,9 +378,11 @@ function DashboardPage() {
 
       {showSignup && <SignupPanel onClose={() => setShowSignup(false)} />}
 
-      <div className={`insight-card ${stats.killed_count > 0 ? 'insight-warn' : 'insight-safe'}`}>
+      <div className={`insight-card ${statsError || stats.killed_count > 0 ? 'insight-warn' : 'insight-safe'}`}>
         <span className="insight-dot" />
-        <span className="insight-text">{buildInsight(stats)}</span>
+        <span className="insight-text">
+          {statsError ? 'Connection issue reaching the backend — retrying…' : buildInsight(stats)}
+        </span>
       </div>
 
       <div className="stat-grid">
@@ -296,7 +403,11 @@ function DashboardPage() {
       <ThresholdForm onSaved={fetchData} />
 
       <div className="section-title">Active workflows</div>
-      {workflows.length === 0 ? (
+      {workflowsError ? (
+        <div className="gauge-row">
+          <span className="gauge-cost connection-status">Connection issue reaching the backend — retrying…</span>
+        </div>
+      ) : workflows.length === 0 ? (
         <div className="gauge-row">
           <span className="gauge-cost">No workflows yet. Run a test agent to see data here.</span>
         </div>

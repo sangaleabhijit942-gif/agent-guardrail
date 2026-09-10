@@ -226,6 +226,11 @@ body {
 .threshold-error {
   color: var(--danger);
 }
+
+.connection-status {
+  color: var(--warn);
+  font-style: italic;
+}
 .dashboard-header {
   display: flex;
   justify-content: space-between;
@@ -450,4 +455,60 @@ body {
   border-color: var(--warn);
   color: #1a1300;
   font-weight: 600;
+}
+
+.gauge-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.gauge-avg {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.gauge-explain-btn {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.gauge-explain-btn:hover {
+  background: rgba(232, 93, 78, 0.1);
+}
+
+.explain-panel {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-top: 10px;
+}
+
+.explain-loading {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.explain-pattern {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--warn);
+  margin-bottom: 8px;
+}
+
+.explain-text {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.6;
+  margin-bottom: 12px;
+  white-space: pre-wrap;
 }
