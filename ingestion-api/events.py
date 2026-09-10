@@ -11,6 +11,7 @@ from auth import get_current_customer
 from thresholds import get_threshold_config
 from config import INPUT_COST_PER_TOKEN, OUTPUT_COST_PER_TOKEN
 from diagnostics import classify_retry_pattern, classify_token_growth
+from alerts import check_graduated_alert
 
 router = APIRouter()
 
@@ -109,4 +110,10 @@ async def receive_event(event: TraceEvent, customer_id: str = Depends(get_curren
                 "diagnosis": diagnosis
             }
 
-    return {"status": "ok"}
+    if config["threshold_type"] == "tokens":
+        alert = check_graduated_alert(client, event.trace_id, customer_id, current_tokens, config["token_threshold"])
+    else:
+        alert = check_graduated_alert(client, event.trace_id, customer_id, current_cost, config["threshold"])
+
+    return {"status": "ok", "alert": alert}
+    
