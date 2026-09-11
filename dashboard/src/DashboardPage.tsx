@@ -34,18 +34,28 @@ interface Explanation {
 
 const API_KEY = "ag_test_51f8a3c2e94b4d7a9c1f6e8b2a3d5c7f"
 const API_BASE_URL = "https://agent-guardrail-api-b3ex.onrender.com"
-const POLL_FETCH_TIMEOUT_MS = 6000
+const POLL_FETCH_TIMEOUT_MS = 70000
 
-// Aborts whatever request is still sitting in `controllerRef` before starting
-// a new one, so polling never lets requests for the same endpoint queue up,
-// and aborts this request itself if it hangs past POLL_FETCH_TIMEOUT_MS.
+// Skips starting a new request for this endpoint while the previous one is
+// still in flight, so polling never lets requests for the same endpoint
+// queue up — but a slow-and-still-alive backend (e.g. a cold-starting
+// Render instance taking longer than one poll interval to answer) is left
+// to finish rather than being killed every tick. POLL_FETCH_TIMEOUT_MS is
+// the worst-case ceiling: past that, this request is aborted and the next
+// poll tick is free to try again.
 function fetchWithTimeout(url: string, controllerRef: { current: AbortController | null }, init?: RequestInit) {
-  controllerRef.current?.abort()
+  if (controllerRef.current && !controllerRef.current.signal.aborted) {
+    return null
+  }
+
   const controller = new AbortController()
   controllerRef.current = controller
   const timeoutId = setTimeout(() => controller.abort(), POLL_FETCH_TIMEOUT_MS)
 
-  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timeoutId))
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => {
+    clearTimeout(timeoutId)
+    if (controllerRef.current === controller) controllerRef.current = null
+  })
 }
 
 function getStatus(pct: number): GaugeStatus {
@@ -327,7 +337,7 @@ function DashboardPage() {
     fetchWithTimeout(`${API_BASE_URL}/workflows`, workflowsAbortRef, {
       headers: { 'X-API-Key': API_KEY }
     })
-      .then((res) => {
+      ?.then((res) => {
         if (!res.ok) throw new Error('Workflows fetch failed')
         return res.json()
       })
@@ -343,7 +353,7 @@ function DashboardPage() {
     fetchWithTimeout(`${API_BASE_URL}/stats`, statsAbortRef, {
       headers: { 'X-API-Key': API_KEY }
     })
-      .then((res) => {
+      ?.then((res) => {
         if (!res.ok) throw new Error('Stats fetch failed')
         return res.json()
       })
