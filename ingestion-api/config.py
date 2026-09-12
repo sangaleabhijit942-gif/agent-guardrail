@@ -5,3 +5,8 @@
 INPUT_COST_PER_TOKEN = 1 / 1_000_000
 OUTPUT_COST_PER_TOKEN = 5 / 1_000_000
 KILL_THRESHOLD = 0.01
+
+# Independent of cost/token thresholds: if a trace produces this many
+# consecutive zero-output-token events, it's treated as stuck in a failure
+# loop and killed even if it's still cheap.
+MAX_CONSECUTIVE_FAILURES = 5
