@@ -18,7 +18,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "https://agent-guardrail-41ol8xg3o-abcd-4881.vercel.app"],
+    allow_origins=["http://localhost:5173", "http://localhost:5174", "https://agent-guardrail-41ol8xg3o-abcd-4881.vercel.app", "https://agent-guardrail-itmnue684-arjitabhi.vercel.app"],
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "X-API-Key"],
 )
