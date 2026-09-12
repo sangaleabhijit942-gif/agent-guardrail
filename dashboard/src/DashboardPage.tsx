@@ -32,7 +32,7 @@ interface Explanation {
   explanation: string
 }
 
-const API_KEY = "ag_test_51f8a3c2e94b4d7a9c1f6e8b2a3d5c7f"
+const API_KEY = "ag_NviJ4ju6plXwjkoPpkZhFlr_o3P6DKC_d1qHu21YKa8"
 const API_BASE_URL = "https://agent-guardrail-api-b3ex.onrender.com"
 const POLL_FETCH_TIMEOUT_MS = 70000
 
