@@ -12,6 +12,7 @@ from thresholds import get_threshold_config
 from config import INPUT_COST_PER_TOKEN, OUTPUT_COST_PER_TOKEN, MAX_CONSECUTIVE_FAILURES
 from diagnostics import classify_retry_pattern, classify_token_growth
 from alerts import check_graduated_alert
+from failure_detection import consecutive_failures_exceeded
 
 router = APIRouter()
 
@@ -66,32 +67,6 @@ def _get_kill_diagnosis(trace_id: str, customer_id: str, client) -> dict:
         return {"pattern": "unavailable", "confidence": "none", "description": f"Diagnosis unavailable: {e}"}
 
 
-def _consecutive_failures_exceeded(trace_id: str, customer_id: str, client) -> bool:
-    """
-    Looks at the most recent MAX_CONSECUTIVE_FAILURES events for this trace.
-    If all of them produced zero output tokens (empty/failed calls), the
-    workflow is stuck in a failure loop even though it may be cheap — this
-    catches that case independently of the cost/token threshold.
-
-    Requires at least MAX_CONSECUTIVE_FAILURES events of history before it
-    can fire; a trace younger than that is never killed by this check alone.
-    """
-    result = client.query(
-        """
-        SELECT tokens_out
-        FROM agent_events
-        WHERE trace_id = {trace_id:String} AND customer_id = {cust:String}
-        ORDER BY timestamp DESC
-        LIMIT {n:UInt32}
-        """,
-        parameters={"trace_id": trace_id, "cust": customer_id, "n": MAX_CONSECUTIVE_FAILURES}
-    )
-    rows = result.result_rows
-    if len(rows) < MAX_CONSECUTIVE_FAILURES:
-        return False
-    return all(row[0] == 0 for row in rows)
-
-
 @router.post("/events")
 async def receive_event(event: TraceEvent, customer_id: str = Depends(get_current_customer)):
     client = get_client()
@@ -103,7 +78,7 @@ async def receive_event(event: TraceEvent, customer_id: str = Depends(get_curren
         column_names=["trace_id", "node_name", "step", "message", "tokens_in", "tokens_out", "cost", "timestamp", "customer_id", "workflow_name"]
     )
 
-    if _consecutive_failures_exceeded(event.trace_id, customer_id, client):
+    if consecutive_failures_exceeded(event.trace_id, customer_id, client):
         print(f"[KILL SIGNAL] Trace '{event.trace_id}' had {MAX_CONSECUTIVE_FAILURES} consecutive empty-output calls — signaling kill")
         diagnosis = _get_kill_diagnosis(event.trace_id, customer_id, client)
         return {

@@ -3,6 +3,7 @@ from clickhouse_client import get_client
 from auth import get_current_customer
 from thresholds import get_threshold_config
 from config import INPUT_COST_PER_TOKEN, OUTPUT_COST_PER_TOKEN
+from failure_detection import consecutive_failures_exceeded
 
 router = APIRouter()
 
@@ -30,18 +31,20 @@ async def list_workflows(customer_id: str = Depends(get_current_customer)):
         trace_id, workflow_name, cost, tokens, event_count = row
         cost = cost or 0.0
         tokens = tokens or 0
-        event_count = event_count or 1  # avoid division by zero, though GROUP BY guarantees >=1
+        event_count = event_count or 1
         config = get_threshold_config(customer_id, workflow_name)
+
+        stuck_in_failure_loop = consecutive_failures_exceeded(trace_id, customer_id, client)
 
         if config["threshold_type"] == "tokens":
             limit_value = config["token_threshold"]
             current_value = tokens
-            status = "killed" if tokens >= config["token_threshold"] else "active"
+            status = "killed" if (tokens >= config["token_threshold"] or stuck_in_failure_loop) else "active"
             display_type = "tokens"
         else:
             limit_value = config["threshold"]
             current_value = cost
-            status = "killed" if cost >= config["threshold"] else "active"
+            status = "killed" if (cost >= config["threshold"] or stuck_in_failure_loop) else "active"
             display_type = "cost"
 
         workflows.append({
@@ -85,12 +88,14 @@ async def get_stats(customer_id: str = Depends(get_current_customer)):
         tokens = tokens or 0
         config = get_threshold_config(customer_id, workflow_name)
 
+        stuck_in_failure_loop = consecutive_failures_exceeded(trace_id, customer_id, client)
+
         if config["threshold_type"] == "tokens":
-            if tokens >= config["token_threshold"]:
+            if tokens >= config["token_threshold"] or stuck_in_failure_loop:
                 killed_count += 1
                 estimated_saved += config["token_threshold"] * ((INPUT_COST_PER_TOKEN + OUTPUT_COST_PER_TOKEN) / 2)
         else:
-            if cost >= config["threshold"]:
+            if cost >= config["threshold"] or stuck_in_failure_loop:
                 killed_count += 1
                 estimated_saved += config["threshold"]
 
